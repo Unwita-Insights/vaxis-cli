@@ -14,5 +14,6 @@ async fn main() {
         Commands::Me                => commands::me::run(),
         Commands::Logout            => commands::logout::run(),
         Commands::Config { action } => commands::config::run(action),
+        Commands::Apps   { action } => commands::apps::run(action).await,
     }
 }

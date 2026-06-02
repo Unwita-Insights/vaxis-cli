@@ -25,6 +25,12 @@ pub enum Commands {
         #[command(subcommand)]
         action: ConfigAction,
     },
+
+    /// Manage your applications
+    Apps {
+        #[command(subcommand)]
+        action: AppsAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -34,4 +40,20 @@ pub enum ConfigAction {
 
     /// Show current configuration
     Show,
+}
+
+#[derive(Subcommand)]
+pub enum AppsAction {
+    /// List all your applications
+    List,
+
+    /// Create a new application
+    Create {
+        /// Application name
+        name: String,
+
+        /// Optional description
+        #[arg(short, long)]
+        description: Option<String>,
+    },
 }
