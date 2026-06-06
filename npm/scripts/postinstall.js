@@ -76,7 +76,7 @@ async function main() {
 
   const ext = platform() === 'win32' ? '.exe' : '';
   const dest = join(BIN_DIR, `vaxis-native${ext}`);
-  const url = `https://github.com/unwita/vaxis-cli/releases/download/v${VERSION}/${binaryName}`;
+  const url = `https://github.com/Unwita-Insights/vaxis-cli/releases/download/v${VERSION}/${binaryName}`;
 
   process.stdout.write(`[vaxis] Downloading binary for ${platformKey}...\n`);
 

@@ -36,7 +36,7 @@ if (!existsSync(binPath)) {
   const platformKey = getPlatformKey();
   process.stderr.write(
     `[vaxis] Native binary not found for platform: ${platformKey}\n` +
-    `[vaxis] Try reinstalling: npm install -g vaxis\n` +
+    `[vaxis] Try reinstalling: npm install -g vaxis-cli\n` +
     `[vaxis] Or install from source: cargo install vaxis\n`
   );
   process.exit(1);
