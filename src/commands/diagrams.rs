@@ -393,13 +393,20 @@ async fn generate(token: &str, id: &str, prompt: Option<&str>, mermaid: Option<&
             .send()
             .await
         {
+            let status = cr.status().as_u16();
             if let Ok(child) = cr.json::<serde_json::Value>().await {
-                created_drills.push(serde_json::json!({
-                    "node_id":    node_id,
-                    "diagram_id": child["id"].as_str().unwrap_or(""),
-                    "name":       child["name"].as_str().unwrap_or(node_id),
-                    "already_exists": child["already_exists"].as_bool().unwrap_or(false)
-                }));
+                if status == 200 || status == 201 {
+                    created_drills.push(serde_json::json!({
+                        "node_id":    node_id,
+                        "diagram_id": child["id"].as_str().unwrap_or(""),
+                        "name":       child["name"].as_str().unwrap_or(node_id),
+                        "already_exists": child["already_exists"].as_bool().unwrap_or(false)
+                    }));
+                } else {
+                    eprintln!("  {} Failed to create child for '{}' (HTTP {}): {}",
+                        "⚠".yellow(), node_id, status,
+                        child["error"].as_str().unwrap_or("unknown error"));
+                }
             }
         }
     }

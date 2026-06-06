@@ -1,0 +1,110 @@
+name: Build & Publish
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write  # needed to create GitHub Releases and upload assets
+
+jobs:
+  build-and-release:
+    name: Build ${{ matrix.build.name }}
+    runs-on: ${{ matrix.build.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        build:
+          - name: darwin-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            binary: vaxis-darwin-arm64
+
+          - name: darwin-x64
+            os: macos-14
+            target: x86_64-apple-darwin
+            binary: vaxis-darwin-x64
+
+          - name: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            binary: vaxis-linux-x64
+
+          - name: linux-arm64
+            os: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            binary: vaxis-linux-arm64
+
+          - name: linux-musl-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+            binary: vaxis-linux-musl-x64
+
+          - name: windows-x64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+            binary: vaxis-windows-x64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.build.target }}
+
+      - name: Install cross-compiler (Linux ARM64)
+        if: matrix.build.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      - name: Install musl tools (Linux musl)
+        if: matrix.build.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y musl-tools
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.build.target }}
+
+      - name: Rename binary (Unix)
+        if: matrix.build.os != 'windows-2022'
+        run: |
+          cp target/${{ matrix.build.target }}/release/vaxis ${{ matrix.build.binary }}
+          chmod +x ${{ matrix.build.binary }}
+
+      - name: Rename binary (Windows)
+        if: matrix.build.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          Copy-Item "target\${{ matrix.build.target }}\release\vaxis.exe" "${{ matrix.build.binary }}"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.build.binary }}
+          generate_release_notes: true
+
+  publish-npm:
+    name: Publish to npm
+    needs: build-and-release  # binaries must be on GitHub Releases before postinstall can download them
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Stamp version and publish
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd npm
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
