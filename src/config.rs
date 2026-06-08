@@ -44,3 +44,12 @@ pub fn clear() {
         fs::remove_file(path).expect("cannot remove config file");
     }
 }
+
+const DEFAULT_AUTH_URL: &str = "https://beta.vaxis.dev";
+
+pub fn base_url() -> String {
+    std::env::var("VAXIS_AUTH_URL")
+        .ok()
+        .or_else(|| load().auth_url)
+        .unwrap_or_else(|| DEFAULT_AUTH_URL.to_string())
+}

@@ -1,15 +1,11 @@
 use colored::Colorize;
 use crate::config::{self, UserProfile};
 
-const DEFAULT_AUTH_URL: &str = "https://vaxis.dev";
 const POLL_INTERVAL_SECS: u64 = 2;
 const POLL_MAX_ATTEMPTS: u32 = 150; // 5 minutes
 
 pub async fn run() {
-    let base_url = std::env::var("VAXIS_AUTH_URL")
-        .ok()
-        .or_else(|| config::load().auth_url)
-        .unwrap_or_else(|| DEFAULT_AUTH_URL.to_string());
+    let base_url = crate::config::base_url();
 
     // Step 1: Create a polling state on the server
     let (state, browser_url) = match start_cli_auth(&base_url).await {

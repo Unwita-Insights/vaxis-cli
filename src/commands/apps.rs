@@ -3,15 +3,6 @@ use dialoguer::{Select, Confirm, Input, theme::ColorfulTheme};
 use crate::cli::AppsAction;
 use crate::config;
 
-const DEFAULT_AUTH_URL: &str = "https://vaxis.dev";
-
-fn base_url() -> String {
-    std::env::var("VAXIS_AUTH_URL")
-        .ok()
-        .or_else(|| config::load().auth_url)
-        .unwrap_or_else(|| DEFAULT_AUTH_URL.to_string())
-}
-
 fn auth_token() -> Option<String> {
     config::load().user.map(|u| u.token)
 }
@@ -80,7 +71,7 @@ async fn resolve_id(token: &str, id: Option<String>, prompt: &str) -> String {
 async fn fetch_apps(token: &str) -> Vec<serde_json::Value> {
     let client = reqwest::Client::new();
     let resp = match client
-        .get(format!("{}/api/applications", base_url()))
+        .get(format!("{}/api/applications", crate::config::base_url()))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -130,7 +121,7 @@ async fn list(token: &str, json: bool) {
 async fn create(token: &str, name: &str, description: Option<&str>, json: bool) {
     let client = reqwest::Client::new();
     let resp = match client
-        .post(format!("{}/api/applications", base_url()))
+        .post(format!("{}/api/applications", crate::config::base_url()))
         .header("Authorization", format!("Bearer {}", token))
         .json(&serde_json::json!({ "name": name, "description": description.unwrap_or("") }))
         .send()
@@ -163,7 +154,7 @@ async fn create(token: &str, name: &str, description: Option<&str>, json: bool) 
 async fn fetch_app(token: &str, id: &str) -> serde_json::Value {
     let client = reqwest::Client::new();
     let resp = match client
-        .get(format!("{}/api/applications/{}", base_url(), id))
+        .get(format!("{}/api/applications/{}", crate::config::base_url(), id))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -229,7 +220,7 @@ async fn update(token: &str, id: &str, name: Option<&str>, description: Option<&
     if let Some(ref d) = final_desc { body.insert("description".into(), d.as_str().into()); }
 
     let resp = match client
-        .put(format!("{}/api/applications/{}", base_url(), id))
+        .put(format!("{}/api/applications/{}", crate::config::base_url(), id))
         .header("Authorization", format!("Bearer {}", token))
         .json(&body)
         .send()
@@ -259,7 +250,7 @@ async fn update(token: &str, id: &str, name: Option<&str>, description: Option<&
 async fn share(token: &str, id: &str, json: bool) {
     let client = reqwest::Client::new();
     let resp = match client
-        .post(format!("{}/api/applications/{}/share", base_url(), id))
+        .post(format!("{}/api/applications/{}/share", crate::config::base_url(), id))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -299,7 +290,7 @@ async fn delete(token: &str, id: &str, force: bool, json: bool) {
 
     let client = reqwest::Client::new();
     let resp = match client
-        .delete(format!("{}/api/applications/{}", base_url(), id))
+        .delete(format!("{}/api/applications/{}", crate::config::base_url(), id))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await

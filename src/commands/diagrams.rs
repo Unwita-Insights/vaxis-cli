@@ -3,15 +3,6 @@ use dialoguer::{Select, Confirm, theme::ColorfulTheme};
 use crate::cli::DiagramsAction;
 use crate::config;
 
-const DEFAULT_AUTH_URL: &str = "https://vaxis.dev";
-
-fn base_url() -> String {
-    std::env::var("VAXIS_AUTH_URL")
-        .ok()
-        .or_else(|| config::load().auth_url)
-        .unwrap_or_else(|| DEFAULT_AUTH_URL.to_string())
-}
-
 fn auth_token() -> Option<String> {
     config::load().user.map(|u| u.token)
 }
@@ -111,7 +102,7 @@ async fn resolve_diagram_id(
 async fn fetch_apps(token: &str) -> Vec<serde_json::Value> {
     let client = reqwest::Client::new();
     let resp = match client
-        .get(format!("{}/api/applications", base_url()))
+        .get(format!("{}/api/applications", crate::config::base_url()))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -129,7 +120,7 @@ async fn fetch_apps(token: &str) -> Vec<serde_json::Value> {
 async fn fetch_diagrams(token: &str, app_id: &str) -> Vec<serde_json::Value> {
     let client = reqwest::Client::new();
     let resp = match client
-        .get(format!("{}/api/diagrams?applicationId={}", base_url(), app_id))
+        .get(format!("{}/api/diagrams?applicationId={}", crate::config::base_url(), app_id))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -175,7 +166,7 @@ async fn list(token: &str, app_id: &str, json: bool) {
 async fn create(token: &str, app_id: &str, name: &str, json: bool) {
     let client = reqwest::Client::new();
     let resp = match client
-        .post(format!("{}/api/diagrams", base_url()))
+        .post(format!("{}/api/diagrams", crate::config::base_url()))
         .header("Authorization", format!("Bearer {}", token))
         .json(&serde_json::json!({ "applicationId": app_id, "name": name }))
         .send()
@@ -209,7 +200,7 @@ async fn show(token: &str, id: &str, json: bool) {
     let client = reqwest::Client::new();
 
     let resp = match client
-        .get(format!("{}/api/diagrams/{}", base_url(), id))
+        .get(format!("{}/api/diagrams/{}", crate::config::base_url(), id))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -228,7 +219,7 @@ async fn show(token: &str, id: &str, json: bool) {
 
     // Fetch chat history to surface the last Mermaid — this is what Claude needs
     let current_mermaid = if let Ok(cr) = client
-        .get(format!("{}/api/diagrams/{}/chat", base_url(), id))
+        .get(format!("{}/api/diagrams/{}/chat", crate::config::base_url(), id))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -295,7 +286,7 @@ async fn show(token: &str, id: &str, json: bool) {
 async fn tree_cmd(token: &str, id: &str, json: bool) {
     let client = reqwest::Client::new();
     let resp = match client
-        .get(format!("{}/api/diagrams/{}/tree", base_url(), id))
+        .get(format!("{}/api/diagrams/{}/tree", crate::config::base_url(), id))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -360,7 +351,7 @@ async fn generate(token: &str, id: &str, prompt: Option<&str>, mermaid: Option<&
 
     let client = reqwest::Client::new();
     let resp = match client
-        .post(format!("{}/api/diagrams/{}/generate", base_url(), id))
+        .post(format!("{}/api/diagrams/{}/generate", crate::config::base_url(), id))
         .header("Authorization", format!("Bearer {}", token))
         .json(&body)
         .send()
@@ -387,7 +378,7 @@ async fn generate(token: &str, id: &str, prompt: Option<&str>, mermaid: Option<&
         if node_id.is_empty() { continue; }
 
         if let Ok(cr) = client
-            .post(format!("{}/api/diagrams/{}/children", base_url(), id))
+            .post(format!("{}/api/diagrams/{}/children", crate::config::base_url(), id))
             .header("Authorization", format!("Bearer {}", token))
             .json(&serde_json::json!({ "nodeId": node_id, "nodeLabel": node_id }))
             .send()
@@ -443,7 +434,7 @@ async fn generate(token: &str, id: &str, prompt: Option<&str>, mermaid: Option<&
 async fn undo(token: &str, id: &str, json: bool) {
     let client = reqwest::Client::new();
     let resp = match client
-        .delete(format!("{}/api/diagrams/{}/chat/last", base_url(), id))
+        .delete(format!("{}/api/diagrams/{}/chat/last", crate::config::base_url(), id))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -469,7 +460,7 @@ async fn undo(token: &str, id: &str, json: bool) {
 async fn rename(token: &str, id: &str, name: &str, json: bool) {
     let client = reqwest::Client::new();
     let resp = match client
-        .patch(format!("{}/api/diagrams/{}/meta", base_url(), id))
+        .patch(format!("{}/api/diagrams/{}/meta", crate::config::base_url(), id))
         .header("Authorization", format!("Bearer {}", token))
         .json(&serde_json::json!({ "name": name }))
         .send()
@@ -511,7 +502,7 @@ async fn delete(token: &str, id: &str, force: bool, json: bool) {
 
     let client = reqwest::Client::new();
     let resp = match client
-        .delete(format!("{}/api/diagrams/{}", base_url(), id))
+        .delete(format!("{}/api/diagrams/{}", crate::config::base_url(), id))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -610,7 +601,7 @@ async fn patch(token: &str, id: &str, diff: &str, json: bool) {
 
     let client = reqwest::Client::new();
     let resp = match client
-        .post(format!("{}/api/diagrams/{}/patch", base_url(), id))
+        .post(format!("{}/api/diagrams/{}/patch", crate::config::base_url(), id))
         .header("Authorization", format!("Bearer {}", token))
         .json(&diff_val)
         .send()
@@ -643,7 +634,7 @@ async fn patch(token: &str, id: &str, diff: &str, json: bool) {
 async fn import_cmd(token: &str, id: &str, mermaid: &str, json: bool) {
     let client = reqwest::Client::new();
     let resp = match client
-        .post(format!("{}/api/diagrams/{}/import", base_url(), id))
+        .post(format!("{}/api/diagrams/{}/import", crate::config::base_url(), id))
         .header("Authorization", format!("Bearer {}", token))
         .json(&serde_json::json!({ "mermaid": mermaid }))
         .send()
