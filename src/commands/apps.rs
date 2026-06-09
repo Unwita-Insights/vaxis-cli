@@ -263,7 +263,13 @@ async fn share(token: &str, id: &str, json: bool) {
         401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
         404 => { eprintln!("{} Application not found.", "✗".red()); std::process::exit(1); }
         200 => {
-            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            let mut body: serde_json::Value = resp.json().await.unwrap_or_default();
+            if body["url"].is_null() || body["url"].as_str().unwrap_or("").is_empty() {
+                if let Some(tok) = body["token"].as_str() {
+                    let constructed = format!("{}/view/{}", crate::config::base_url(), tok);
+                    body["url"] = serde_json::Value::String(constructed);
+                }
+            }
             if json {
                 println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
             } else {
