@@ -1,5 +1,5 @@
 {
-  "name": "vaxis-cli",
+  "name": "@unwita-insights/vaxis",
   "version": "0.1.0",
   "description": "Vaxis CLI — diagram and architecture tool for AI-assisted software design",
   "type": "module",
