@@ -168,7 +168,7 @@ async fn create(token: &str, app_id: &str, name: &str, json: bool) {
     let resp = match client
         .post(format!("{}/api/diagrams", crate::config::base_url()))
         .header("Authorization", format!("Bearer {}", token))
-        .json(&serde_json::json!({ "applicationId": app_id, "name": name }))
+        .json(&serde_json::json!({ "application_id": app_id, "name": name }))
         .send()
         .await
     {
@@ -361,26 +361,39 @@ async fn generate(token: &str, id: &str, prompt: Option<&str>, mermaid: Option<&
         Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
     };
 
-    match resp.status().as_u16() {
+    let status = resp.status().as_u16();
+    let result: serde_json::Value = resp.json().await.unwrap_or_default();
+
+    match status {
         401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
         404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
-        _ => {}
+        200 | 201 => {}
+        _ => {
+            let msg = result["error"]["message"].as_str()
+                .or_else(|| result["error"].as_str())
+                .unwrap_or("unexpected server error");
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+            } else {
+                eprintln!("{} Generate failed (HTTP {}): {}", "✗".red(), status, msg);
+            }
+            std::process::exit(1);
+        }
     }
 
-    let result: serde_json::Value = resp.json().await.unwrap_or_default();
     let mermaid = result["mermaid"].as_str().unwrap_or("").to_string();
     let drills  = result["drills"].as_array().cloned().unwrap_or_default();
 
     // Create child diagrams for every drill block the AI returned
     let mut created_drills: Vec<serde_json::Value> = Vec::new();
     for drill in &drills {
-        let node_id = drill["nodeId"].as_str().unwrap_or("");
+        let node_id = drill["node_id"].as_str().unwrap_or("");
         if node_id.is_empty() { continue; }
 
         if let Ok(cr) = client
             .post(format!("{}/api/diagrams/{}/children", crate::config::base_url(), id))
             .header("Authorization", format!("Bearer {}", token))
-            .json(&serde_json::json!({ "nodeId": node_id, "nodeLabel": node_id }))
+            .json(&serde_json::json!({ "node_id": node_id, "node_label": node_id }))
             .send()
             .await
         {
