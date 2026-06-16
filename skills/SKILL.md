@@ -102,9 +102,12 @@ vaxis diagrams format --json
 # Use this for small iterative changes to large diagrams (20+ nodes)
 vaxis diagrams patch <diagramId> --diff '{"add_nodes":[{"id":"cache","label":"Redis Cache"}],"add_edges":[{"from":"api","to":"cache","label":"read"}],"remove_nodes":[],"remove_edges":[],"update_labels":[]}' --json
 
-# Save raw user-provided Mermaid directly (no AI call)
-# Use when the user pastes Mermaid from another tool or provides it directly
-vaxis diagrams import <diagramId> --mermaid "graph TD\n    A[User] --> B[API]" --json
+# Save raw Mermaid directly (no AI call, no server processing)
+# REQUIRED for non-flowchart types: sequenceDiagram, erDiagram, stateDiagram-v2, classDiagram, journey
+# WARNING: import alone makes a diagram invisible in the web UI — always run generate FIRST,
+#          then import on top to overwrite with the correct non-flowchart mermaid.
+# Also use when the user pastes Mermaid from another tool or provides it directly
+vaxis diagrams import <diagramId> --mermaid "sequenceDiagram\n    A->>B: hello" --json
 ```
 
 ---
@@ -373,14 +376,81 @@ Use this instead of generate when the diagram has 20+ nodes and only a small cha
 ```
 Use when the user pastes raw Mermaid into the chat or provides it from another tool.
 
+IMPORTANT: import alone makes the diagram invisible in the Vaxis web UI because the UI reads
+from the shared chat thread (populated by generate), not from current_mermaid (set by import).
+Always run a generate step first, then import on top.
+
+For flowchart types (graph TD / graph LR) — just use generate, no import needed:
+1. vaxis diagrams list <appId> --json  → find or create the target diagram
+2. vaxis diagrams generate <diagramId> --mermaid "<user's mermaid>" --json
+3. Confirm: "Done — saved your diagram."
+
+For non-flowchart types (sequenceDiagram, erDiagram, stateDiagram-v2, etc.) — two steps:
 1. vaxis diagrams list <appId> --json  → find or create the target diagram
 
-2. vaxis diagrams import <diagramId> --mermaid "<user's mermaid>" --json
-   → Saves directly, no AI token cost
+2. vaxis diagrams generate <diagramId> --mermaid "<flowchart placeholder>" --json
+   → Use a simple graph TD placeholder (e.g. "graph TD\n    A[placeholder]")
+   → This adds a chat thread entry so the diagram is visible in the web UI
 
-3. vaxis diagrams show <diagramId> --json  → confirm the content was saved
+3. vaxis diagrams import <diagramId> --mermaid "<user's non-flowchart mermaid>" --json
+   → Overwrites current_mermaid with the correct diagram type
 
-4. Confirm: "Done — imported your diagram to [project name]. You can view it in the Vaxis web app."
+4. vaxis diagrams show <diagramId> --json  → confirm current_mermaid is SET
+
+5. Confirm: "Done — imported your diagram to [project name]. You can view it in the Vaxis web app."
+```
+
+### Workflow 17 — Pre-flight check before creating a diagram
+
+```
+Run this mentally before every generate or import call to catch problems before they happen.
+
+1. CHECK DIAGRAM TYPE
+   → Is it graph TD / graph LR?          → use generate --mermaid
+   → Is it sequenceDiagram / erDiagram / stateDiagram-v2 / classDiagram / journey?
+                                          → use generate --mermaid (flowchart placeholder) THEN import
+
+2. CHECK NODE IDs
+   → Every node ID must be alphanumeric + underscores only (no spaces, no hyphens)
+   → Every %% vaxis:drill <nodeId> must reference a node ID that actually exists in the diagram
+   → All node IDs must be unique within the diagram
+
+3. CHECK LIMITS
+   → Node count ≤ 50
+   → Edge count ≤ 60
+   → If over 30 nodes: break into child diagrams using drill markers
+
+4. CHECK DRILL MARKERS
+   → %% vaxis:drill lines must appear AFTER the node they reference
+   → Only add drills for subsystems that genuinely need expansion
+   → Never add drills to leaf nodes (DB tables, UI buttons, etc.)
+
+5. ONLY THEN generate or import.
+```
+
+### Workflow 18 — Post-creation verification (run after every generate or import)
+
+```
+After every generate or import call, verify the diagram saved correctly before moving on.
+
+1. vaxis diagrams show <diagramId> --json
+
+2. CHECK current_mermaid
+   → current_mermaid: SET  → ✓ diagram has content saved
+   → current_mermaid: NONE → diagram may appear blank in web UI
+     Fix: run generate --mermaid "<mermaid>" again on this diagram
+
+3. CHECK for non-flowchart type corruption
+   → If diagram type is sequenceDiagram / erDiagram / stateDiagram-v2:
+     Read current_mermaid — does it start with "flowchart TB"?
+     If yes: run undo, then generate (flowchart placeholder), then import (correct mermaid)
+
+4. CHECK drills were created (if %% vaxis:drill markers were used)
+   → The generate response drills[] should list every marked node
+   → For each drill entry: save the diagram_id — you will need to fill these in
+
+5. If everything checks out: report to user and continue.
+   If any check fails: fix before proceeding — never leave a broken diagram and move on.
 ```
 
 ### Workflow 16 — End session with shareable link
@@ -401,14 +471,16 @@ This is an inline reference. You do not need to call `vaxis diagrams format` for
 
 ### Supported diagram types
 
-| Type | Keyword | When to use |
-|------|---------|-------------|
-| Flowchart | `graph TD` / `graph LR` | Architecture, service maps, general flows |
-| ER diagram | `erDiagram` | Database schema, entity relationships |
-| Sequence | `sequenceDiagram` | Request/response flows, inter-service calls |
-| State machine | `stateDiagram-v2` | Order lifecycle, auth state, resource states |
-| Class diagram | `classDiagram` | Domain model, OOP hierarchy, type relationships |
-| User journey | `journey` | Onboarding flows, user journeys |
+| Type | Keyword | When to use | Command |
+|------|---------|-------------|---------|
+| Flowchart | `graph TD` / `graph LR` | Architecture, service maps, general flows | `generate` |
+| ER diagram | `erDiagram` | Database schema, entity relationships | **`import`** |
+| Sequence | `sequenceDiagram` | Request/response flows, inter-service calls | **`import`** |
+| State machine | `stateDiagram-v2` | Order lifecycle, auth state, resource states | **`import`** |
+| Class diagram | `classDiagram` | Domain model, OOP hierarchy, type relationships | **`import`** |
+| User journey | `journey` | Onboarding flows, user journeys | **`import`** |
+
+> **Why:** The `generate` command routes through the Vaxis server pipeline which always prepends a `flowchart TB` init block to the saved Mermaid. For non-flowchart types this creates invalid syntax (two diagram type declarations). Use `import` to save raw Mermaid directly with no server modification.
 
 ### Examples
 
@@ -638,6 +710,8 @@ Note: `parent_node_id` is the node ID in the parent diagram that this child was 
 | `drills` array is empty after `generate` | The AI did not mark any nodes for drilling. This is fine for simple diagrams. Offer to drill manually into any node the user points to. |
 | User gives ambiguous instruction ("update the diagram") | Run Workflow 12 — ask which diagram, ask what change, then proceed. Never guess. |
 | User refers to a subsystem by name ("the auth flow") | Check conversation context first. If diagram IDs are already known, use them. Otherwise run `vaxis diagrams tree --json` to find the correct child diagram ID. |
+| `sequenceDiagram`, `erDiagram`, or `stateDiagram-v2` renders blank or broken after `generate` | The server injected `flowchart TB` before your diagram type declaration, creating invalid Mermaid. Run `vaxis diagrams undo <id> --json`, then re-save with `vaxis diagrams import <id> --mermaid "<your-mermaid>" --json`. |
+| Diagram shows blank in the web UI even though `import` returned `ok: true` | `import` sets `current_mermaid` but does NOT add to the shared chat thread that the web UI reads from. Run `vaxis diagrams generate <id> --mermaid "<any-flowchart>"` first to populate the thread, then re-run `import` with the correct mermaid. |
 
 ---
 
@@ -677,3 +751,9 @@ Note: `parent_node_id` is the node ID in the parent diagram that this child was 
 13. **Confirm before destructive actions.** Before running `delete` on a diagram or application, always ask for confirmation and state what will be cascaded. After deletion, report exactly what was removed.
 
 14. **Preserve existing nodes on every update.** When updating a diagram, read `current_mermaid` first and carry forward all existing nodes. Only modify what the user asked to change. No node should disappear from an update unless the user explicitly asked to remove it.
+
+15. **Use `import` for non-flowchart diagram types.** When saving `sequenceDiagram`, `erDiagram`, `stateDiagram-v2`, `classDiagram`, or `journey` Mermaid, always use `vaxis diagrams import` instead of `vaxis diagrams generate`. The `generate` command's server pipeline prepends a `flowchart TB` block that breaks these diagram types. Reserve `generate` exclusively for `graph TD` / `graph LR` flowcharts.
+
+16. **Always `generate` before `import`.** The Vaxis web UI renders diagrams from the shared chat thread, which only `generate` writes to. `import` sets `current_mermaid` only — a diagram that was only imported (never generated) appears blank in the web UI. The correct pattern for non-flowchart types: run `generate --mermaid "<flowchart placeholder>"` first to make the diagram visible, then run `import --mermaid "<correct-non-flowchart-mermaid>"` to store the proper content.
+
+17. **Pre-flight check before every diagram operation. Post-flight verify after every diagram operation.** Before generating or importing any diagram, run Workflow 17 mentally to catch format, node ID, limit, and drill marker issues before they cause broken diagrams. After every generate or import, run Workflow 18 to confirm `current_mermaid` is SET, no `flowchart TB` corruption exists, and all drill child diagrams were created. Never skip verification and move on — a broken diagram left unchecked wastes the user's time.
