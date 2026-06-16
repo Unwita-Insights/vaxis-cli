@@ -474,7 +474,7 @@ graph TD
     %% vaxis:drill auth
 ```
 
-Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annotates. The CLI auto-creates child diagrams for every drill block after `generate` returns.
+Add `%% vaxis:drill <nodeId>` anywhere in the diagram after defining the node. The CLI scans for all drill markers and auto-creates child diagrams for each one after `generate` returns.
 
 ### Node ID rules
 
@@ -511,21 +511,21 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
 {
   "url": "https://beta.vaxis.dev/view/abc123xyz",
   "token": "abc123xyz",
-  "created_at": "2026-06-04T10:00:00Z"
+  "edit_token": "abc123edit"
 }
 ```
 
 ### `vaxis diagrams list --json`
 ```json
 [
-  { "id": "diag_xxx", "name": "Root Architecture", "parent_diagram_id": null, "created_at": "..." },
-  { "id": "diag_yyy", "name": "Payment Service", "parent_diagram_id": "diag_xxx", "created_at": "..." }
+  { "id": "diag_xxx", "name": "Root Architecture", "parent_diagram_id": null, "created_at": "...", "updated_at": "..." },
+  { "id": "diag_yyy", "name": "Payment Service", "parent_diagram_id": "diag_xxx", "created_at": "...", "updated_at": "..." }
 ]
 ```
 
 ### `vaxis diagrams create --json`
 ```json
-{ "id": "diag_xxx", "name": "Payment Architecture", "application_id": "app_xxx", "created_at": "..." }
+{ "id": "diag_xxx", "name": "Payment Architecture" }
 ```
 
 ### `vaxis diagrams show --json`
@@ -549,11 +549,12 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
   "diagram_id": "diag_xxx",
   "mermaid": "graph TD\n    A[User] --> B[API Gateway]\n    ...",
   "drills": [
-    { "node_id": "payment", "diagram_id": "diag_yyy", "name": "payment" },
-    { "node_id": "auth",    "diagram_id": "diag_zzz", "name": "auth" }
+    { "node_id": "payment", "diagram_id": "diag_yyy", "name": "payment", "already_exists": false },
+    { "node_id": "auth",    "diagram_id": "diag_zzz", "name": "auth",    "already_exists": true }
   ]
 }
 ```
+Note: `already_exists: true` means the child diagram was already there — skip regenerating it unless the user asked to update it.
 
 ### `vaxis diagrams tree --json`
 ```json
@@ -562,17 +563,20 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
   "tree": {
     "id": "diag_xxx",
     "name": "Payment System",
+    "child_nodes": { "payment": "diag_yyy" },
     "children": [
       {
         "id": "diag_yyy",
         "name": "Payment Service",
-        "node_id": "payment",
+        "parent_node_id": "payment",
+        "child_nodes": {},
         "children": []
       }
     ]
   }
 }
 ```
+Note: `parent_node_id` is the node ID in the parent diagram that this child was drilled from. `child_nodes` maps node ID → child diagram ID.
 
 ### `vaxis diagrams format --json`
 ```json

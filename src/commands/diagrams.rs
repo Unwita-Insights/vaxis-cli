@@ -120,7 +120,7 @@ async fn fetch_apps(token: &str) -> Vec<serde_json::Value> {
 async fn fetch_diagrams(token: &str, app_id: &str) -> Vec<serde_json::Value> {
     let client = reqwest::Client::new();
     let resp = match client
-        .get(format!("{}/api/diagrams?applicationId={}", crate::config::base_url(), app_id))
+        .get(format!("{}/api/applications/{}/diagrams", crate::config::base_url(), app_id))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
