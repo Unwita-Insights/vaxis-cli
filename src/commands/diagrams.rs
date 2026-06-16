@@ -217,27 +217,9 @@ async fn show(token: &str, id: &str, json: bool) {
 
     let mut diagram: serde_json::Value = resp.json().await.unwrap_or_default();
 
-    // Fetch chat history to surface the last Mermaid — this is what Claude needs
-    let current_mermaid = if let Ok(cr) = client
-        .get(format!("{}/api/diagrams/{}/chat", crate::config::base_url(), id))
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-    {
-        if let Ok(chat) = cr.json::<serde_json::Value>().await {
-            chat["messages"]
-                .as_array()
-                .and_then(|msgs| {
-                    msgs.iter().rev().find(|m| m["role"].as_str() == Some("assistant"))
-                })
-                .and_then(|m| m["content"].as_str())
-                .map(|s| s.to_string())
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    // Use current_mermaid returned by the diagram endpoint — it holds the
+    // latest assistant mermaid for this specific diagram's chat thread.
+    let current_mermaid = diagram["current_mermaid"].as_str().map(|s| s.to_string());
 
     if json {
         if let Some(ref mermaid) = current_mermaid {
@@ -447,7 +429,7 @@ async fn generate(token: &str, id: &str, prompt: Option<&str>, mermaid: Option<&
 async fn undo(token: &str, id: &str, json: bool) {
     let client = reqwest::Client::new();
     let resp = match client
-        .delete(format!("{}/api/diagrams/{}/chat/last", crate::config::base_url(), id))
+        .delete(format!("{}/api/diagrams/{}/chat/messages/last", crate::config::base_url(), id))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -473,7 +455,7 @@ async fn undo(token: &str, id: &str, json: bool) {
 async fn rename(token: &str, id: &str, name: &str, json: bool) {
     let client = reqwest::Client::new();
     let resp = match client
-        .patch(format!("{}/api/diagrams/{}/meta", crate::config::base_url(), id))
+        .patch(format!("{}/api/diagrams/{}", crate::config::base_url(), id))
         .header("Authorization", format!("Bearer {}", token))
         .json(&serde_json::json!({ "name": name }))
         .send()
