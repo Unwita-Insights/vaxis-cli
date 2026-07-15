@@ -8,6 +8,13 @@ fn auth_token() -> Option<String> {
 }
 
 pub async fn run(action: DiagramsAction, json: bool) {
+    // `format` is a static reference — no auth or network needed. Handle it
+    // before the auth gate so a syntax lookup works even when logged out.
+    if matches!(action, DiagramsAction::Format) {
+        format_cmd(json);
+        return;
+    }
+
     let token = match auth_token() {
         Some(t) => t,
         None => {
