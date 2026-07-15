@@ -173,16 +173,6 @@ pub enum DiagramsAction {
     /// Return Mermaid format reference — diagram types, syntax rules, limits
     Format,
 
-    /// Apply a targeted diff to a diagram without rewriting the full Mermaid
-    Patch {
-        /// Diagram ID
-        id: String,
-
-        /// JSON diff: {"add_nodes":[...],"add_edges":[...],"remove_nodes":[...],"remove_edges":[...],"update_labels":[...]}
-        #[arg(long)]
-        diff: String,
-    },
-
     /// Save raw Mermaid to a diagram directly, bypassing AI
     Import {
         /// Diagram ID
