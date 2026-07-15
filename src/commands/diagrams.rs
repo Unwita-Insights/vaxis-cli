@@ -119,8 +119,10 @@ async fn fetch_apps(token: &str) -> Vec<serde_json::Value> {
 
 async fn fetch_diagrams(token: &str, app_id: &str) -> Vec<serde_json::Value> {
     let client = reqwest::Client::new();
+    // Diagrams are listed under the application (root diagrams only). The old
+    // `GET /api/diagrams?applicationId=` route was removed in the backend refactor.
     let resp = match client
-        .get(format!("{}/api/diagrams?applicationId={}", crate::config::base_url(), app_id))
+        .get(format!("{}/api/applications/{}/diagrams", crate::config::base_url(), app_id))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -128,11 +130,24 @@ async fn fetch_diagrams(token: &str, app_id: &str) -> Vec<serde_json::Value> {
         Ok(r) => r,
         Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
     };
-    if resp.status() == 401 {
-        eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow());
-        std::process::exit(1);
+    match resp.status().as_u16() {
+        401 => {
+            eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow());
+            std::process::exit(1);
+        }
+        404 => { eprintln!("{} Application not found.", "✗".red()); std::process::exit(1); }
+        200 => {}
+        s => { eprintln!("{} Could not list diagrams (HTTP {}).", "✗".red(), s); std::process::exit(1); }
     }
-    resp.json().await.unwrap_or_default()
+    // Report a non-array body instead of silently collapsing it to an empty list
+    // (previously `unwrap_or_default()` hid moved endpoints / error objects).
+    match resp.json::<serde_json::Value>().await {
+        Ok(serde_json::Value::Array(arr)) => arr,
+        _ => {
+            eprintln!("{} Unexpected response from server (expected a diagram list).", "✗".red());
+            std::process::exit(1);
+        }
+    }
 }
 
 async fn list(token: &str, app_id: &str, json: bool) {
@@ -217,27 +232,11 @@ async fn show(token: &str, id: &str, json: bool) {
 
     let mut diagram: serde_json::Value = resp.json().await.unwrap_or_default();
 
-    // Fetch chat history to surface the last Mermaid — this is what Claude needs
-    let current_mermaid = if let Ok(cr) = client
-        .get(format!("{}/api/diagrams/{}/chat", crate::config::base_url(), id))
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-    {
-        if let Ok(chat) = cr.json::<serde_json::Value>().await {
-            chat["messages"]
-                .as_array()
-                .and_then(|msgs| {
-                    msgs.iter().rev().find(|m| m["role"].as_str() == Some("assistant"))
-                })
-                .and_then(|m| m["content"].as_str())
-                .map(|s| s.to_string())
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    // The diagram response now carries `current_mermaid` directly. We no longer
+    // make a second `/chat` call: it was an extra round-trip, and taking the last
+    // assistant message wrongly surfaced Ask-mode prose answers as if they were
+    // the diagram's Mermaid.
+    let current_mermaid = diagram["current_mermaid"].as_str().map(|s| s.to_string());
 
     if json {
         if let Some(ref mermaid) = current_mermaid {
@@ -447,7 +446,7 @@ async fn generate(token: &str, id: &str, prompt: Option<&str>, mermaid: Option<&
 async fn undo(token: &str, id: &str, json: bool) {
     let client = reqwest::Client::new();
     let resp = match client
-        .delete(format!("{}/api/diagrams/{}/chat/last", crate::config::base_url(), id))
+        .delete(format!("{}/api/diagrams/{}/chat/messages/last", crate::config::base_url(), id))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -473,7 +472,7 @@ async fn undo(token: &str, id: &str, json: bool) {
 async fn rename(token: &str, id: &str, name: &str, json: bool) {
     let client = reqwest::Client::new();
     let resp = match client
-        .patch(format!("{}/api/diagrams/{}/meta", crate::config::base_url(), id))
+        .patch(format!("{}/api/diagrams/{}", crate::config::base_url(), id))
         .header("Authorization", format!("Bearer {}", token))
         .json(&serde_json::json!({ "name": name }))
         .send()
