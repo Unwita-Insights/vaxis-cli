@@ -395,14 +395,19 @@ This is an inline reference. You do not need to call `vaxis diagrams format` for
 
 ### Supported diagram types
 
+**Editable / re-generatable types** (only `flowchart` supports drill blocks):
+
 | Type | Keyword | When to use |
 |------|---------|-------------|
-| Flowchart | `graph TD` / `graph LR` | Architecture, service maps, general flows |
-| ER diagram | `erDiagram` | Database schema, entity relationships |
-| Sequence | `sequenceDiagram` | Request/response flows, inter-service calls |
-| State machine | `stateDiagram-v2` | Order lifecycle, auth state, resource states |
-| Class diagram | `classDiagram` | Domain model, OOP hierarchy, type relationships |
-| User journey | `journey` | Onboarding flows, user journeys |
+| Flowchart | `flowchart TB` / `flowchart LR` (`graph TD/LR` also works) | Architecture, services, processes, data flow — **the default**, and the only drillable type |
+| Sequence | `sequenceDiagram` | Request/response, protocol, API interaction, lifecycle over time |
+| Class diagram | `classDiagram` | Object models, domain entities, inheritance/composition |
+| ER diagram | `erDiagram` | Database entities, tables, relationships, cardinality |
+| State machine | `stateDiagram-v2` | Finite states, lifecycle, status transitions, workflow states |
+
+**Image-fallback types** — valid Mermaid, but rendered as a **static image** (NOT editable or drillable). Use only when the user explicitly asks for that family: `gantt`, `pie`, `journey`, `timeline`, `mindmap`, `requirementDiagram`, `C4`, `sankey`, `xychart`, `block`, `kanban`, `radar`, `treemap`, `venn`, and more. (Note: `journey` is image-fallback, **not** an editable type.)
+
+When editing an existing diagram, keep its current type unless the user explicitly asks to convert it.
 
 ### Examples
 
@@ -468,7 +473,7 @@ graph TD
     %% vaxis:drill auth
 ```
 
-Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annotates. The CLI auto-creates child diagrams for every drill block after `generate` returns.
+Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annotates. The CLI auto-creates child diagrams for every drill block after `generate` returns. **Drill blocks work on flowcharts only** — never add them to sequence / class / er / state or any image-fallback diagram.
 
 ### Node ID rules
 

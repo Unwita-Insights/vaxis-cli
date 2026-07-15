@@ -562,46 +562,53 @@ async fn delete(token: &str, id: &str, force: bool, json: bool) {
 
 fn format_cmd(_json: bool) {
     let spec = serde_json::json!({
-        "supported_types": [
+        "editable_types": [
             {
                 "type": "flowchart",
-                "keyword": "graph TD / graph LR",
-                "when": "Architecture, service maps, general flows",
-                "example": "graph TD\n    A[User] --> B[API Gateway]\n    B --> C[Auth]\n    B --> D[Payment]"
-            },
-            {
-                "type": "er",
-                "keyword": "erDiagram",
-                "when": "Database schema, entity relationships",
-                "example": "erDiagram\n    USER ||--o{ ORDER : places\n    ORDER ||--|{ LINE_ITEM : contains"
+                "keyword": "flowchart TB / flowchart LR (graph TD/LR also works)",
+                "when": "Architecture, services, processes, data flow, general diagrams",
+                "drillable": true,
+                "example": "flowchart TB\n    A[User] --> B[API Gateway]\n    B --> C[Auth]\n    B --> D[Payment]"
             },
             {
                 "type": "sequence",
                 "keyword": "sequenceDiagram",
-                "when": "Request/response flows, inter-service calls",
+                "when": "Request/response, protocol, API interaction, lifecycle over time",
+                "drillable": false,
                 "example": "sequenceDiagram\n    Client->>API: POST /pay\n    API->>Stripe: charge\n    Stripe-->>API: ok\n    API-->>Client: 200"
-            },
-            {
-                "type": "state",
-                "keyword": "stateDiagram-v2",
-                "when": "Order lifecycle, auth state, resource states",
-                "example": "stateDiagram-v2\n    [*] --> Pending\n    Pending --> Processing\n    Processing --> Complete\n    Processing --> Failed"
             },
             {
                 "type": "class",
                 "keyword": "classDiagram",
-                "when": "Domain model, OOP hierarchy, type relationships",
+                "when": "Object models, domain entities, inheritance/composition",
+                "drillable": false,
                 "example": "classDiagram\n    Animal <|-- Dog\n    Animal : +name\n    Animal : +speak()"
             },
             {
-                "type": "journey",
-                "keyword": "journey",
-                "when": "User journeys, onboarding flows",
-                "example": "journey\n    title Checkout\n    section Cart\n      Add item: 5: User\n    section Pay\n      Enter card: 3: User"
+                "type": "er",
+                "keyword": "erDiagram",
+                "when": "Database entities, tables, relationships, cardinality",
+                "drillable": false,
+                "example": "erDiagram\n    USER ||--o{ ORDER : places\n    ORDER ||--|{ LINE_ITEM : contains"
+            },
+            {
+                "type": "state",
+                "keyword": "stateDiagram-v2",
+                "when": "Finite states, lifecycle, status transitions, workflow states",
+                "drillable": false,
+                "example": "stateDiagram-v2\n    [*] --> Pending\n    Pending --> Processing\n    Processing --> Complete\n    Processing --> Failed"
             }
         ],
+        "editable_types_note": "These 5 types are editable/re-generatable in Vaxis. Only flowchart supports drill blocks / child diagrams. Prefer flowchart for general architecture.",
+        "image_fallback_types": [
+            "gantt", "pie", "journey", "timeline", "mindmap", "requirementDiagram",
+            "C4", "sankey", "xychart", "block", "packet", "architecture", "kanban",
+            "radar", "treemap", "venn", "ishikawa", "info"
+        ],
+        "image_fallback_note": "Valid Mermaid, but rendered as a static image in Vaxis — NOT editable or drillable. Use only when the user explicitly asks for that family (e.g. 'make a Gantt chart', 'timeline', 'mindmap', 'C4'). Note: 'journey' is image-fallback here, not an editable type.",
         "drill_syntax": "%% vaxis:drill <nodeId>",
-        "drill_description": "Add this comment after any node to mark it as a drill target. The CLI auto-creates child diagrams for every drill block returned by generate.",
+        "drill_description": "FLOWCHART ONLY. Add this comment after a node to mark it as a drill target; the CLI auto-creates a child diagram for each drill block returned by generate. Do NOT use drill blocks with sequence/class/er/state or any image-fallback type.",
+        "preserve_type_on_edit": "When editing an existing diagram, keep its current type unless the user explicitly asks to convert it.",
         "node_id_rules": [
             "Alphanumeric and underscores only — no spaces",
             "camelCase or snake_case both fine",
@@ -611,15 +618,15 @@ fn format_cmd(_json: bool) {
         "limits": {
             "max_nodes_per_diagram": 50,
             "max_edges_per_diagram": 60,
-            "recommendation": "Use drill blocks when a diagram exceeds 30 nodes"
+            "recommendation": "Use drill blocks when a flowchart exceeds 30 nodes"
         },
         "best_practices": [
-            "graph TD for architecture (top-down)",
-            "graph LR for pipelines and data flows (left-right)",
-            "Group related nodes in subgraphs",
-            "Label every edge — arrows with labels communicate intent",
-            "Root diagrams: broad strokes (services, domains)",
-            "Child diagrams: fine detail (functions, data models, steps)"
+            "flowchart TB for architecture (top-down)",
+            "flowchart LR for pipelines and data flows (left-right)",
+            "Group related nodes in subgraphs (keep them flat — never nest)",
+            "Label edges only when the relationship isn't obvious from node names",
+            "Cap each node at ~4 connections; avoid hub-and-spoke clutter",
+            "Root diagrams: broad strokes (services, domains); child diagrams: fine detail"
         ]
     });
     println!("{}", serde_json::to_string_pretty(&spec).unwrap_or_default());
