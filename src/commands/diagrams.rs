@@ -367,6 +367,19 @@ async fn generate(token: &str, id: &str, prompt: Option<&str>, mermaid: Option<&
         401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
         404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
         200 | 201 => {}
+        429 => {
+            // AI quota / rate limit (AiQuotaException) — surface the server's
+            // friendly message instead of a generic "unexpected status".
+            let msg = result["error"]["message"].as_str()
+                .or_else(|| result["error"].as_str())
+                .unwrap_or("You're generating too fast — wait a minute and try again.");
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+            } else {
+                eprintln!("{} Rate limited: {}", "⚠".yellow(), msg);
+            }
+            std::process::exit(1);
+        }
         _ => {
             let msg = result["error"]["message"].as_str()
                 .or_else(|| result["error"].as_str())
@@ -389,10 +402,20 @@ async fn generate(token: &str, id: &str, prompt: Option<&str>, mermaid: Option<&
         let node_id = drill["node_id"].as_str().unwrap_or("");
         if node_id.is_empty() { continue; }
 
+        // Seed the child with the drill's Mermaid when the generate response
+        // included one, so a drilled-in diagram opens pre-populated instead of
+        // empty. The field is ignored by backends that don't support it.
+        let mut child_body = serde_json::json!({ "node_id": node_id, "node_label": node_id });
+        if let Some(seed) = drill["mermaid"].as_str() {
+            if !seed.is_empty() {
+                child_body["seed_mermaid"] = serde_json::Value::String(seed.to_string());
+            }
+        }
+
         if let Ok(cr) = client
             .post(format!("{}/api/diagrams/{}/children", crate::config::base_url(), id))
             .header("Authorization", format!("Bearer {}", token))
-            .json(&serde_json::json!({ "node_id": node_id, "node_label": node_id }))
+            .json(&child_body)
             .send()
             .await
         {
