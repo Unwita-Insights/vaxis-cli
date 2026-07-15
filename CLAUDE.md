@@ -93,20 +93,51 @@ src/
   `current_mermaid`.
 - **`format`** makes no network call — it returns a hardcoded Mermaid reference spec.
 
-## Backend API surface the CLI depends on
+## Backend API surface the CLI depends on (the contract)
 
-`POST /api/cli/start`, `GET /api/cli/poll?state=`,
-`GET|POST /api/applications`, `GET|PUT|DELETE /api/applications/{id}`,
-`POST /api/applications/{id}/share`,
-`GET|POST /api/diagrams`, `GET|DELETE /api/diagrams/{id}`,
-`POST /api/diagrams/{id}/generate|children|patch|import`,
-`GET /api/diagrams/{id}/chat|tree`, `DELETE /api/diagrams/{id}/chat/last`,
-`PATCH /api/diagrams/{id}/meta`.
+**🔴 STRONG RULE — this CLI is a hard-coded HTTP client of the `vaxis` backend (`apps/api` in
+the separate repo [`vaxis`](https://github.com/Unwita-Insights/vaxis)). Every URL and JSON
+field name is a literal string in the Rust source; there is NO shared schema.** This creates a
+two-way contract that MUST stay in sync:
+
+- **If the backend changes a consumed endpoint** (rename/remove a route, change a method/path,
+  rename a request/response field) → the CLI breaks silently. The mirror of this rule lives in
+  `vaxis`'s `CLAUDE.md` (API routes section) and lists the same endpoints.
+- **If the CLI starts consuming a NEW backend endpoint, or stops using one** → update the list
+  below AND the corresponding list in `vaxis`'s `CLAUDE.md` in the same change, so both sides
+  agree on exactly which routes are coupled. Do not add a new backend call without recording it
+  in both places.
+
+Endpoints the CLI is coupled to (backend's CURRENT paths):
+
+- **Auth:** `POST /api/cli/start`, `GET /api/cli/poll?state=`, `POST /api/cli/complete`,
+  `Bearer <cli_token>` auth.
+- **Apps:** `GET|POST /api/applications`, `GET|PUT|DELETE /api/applications/{id}`,
+  `POST /api/applications/{id}/share`, `GET /api/applications/{id}/diagrams` (list diagrams).
+- **Diagrams:** `POST /api/diagrams`, `GET|DELETE /api/diagrams/{id}`,
+  `PATCH /api/diagrams/{id}` (rename), `POST /api/diagrams/{id}/generate`,
+  `POST /api/diagrams/{id}/children`, `POST /api/diagrams/{id}/import`,
+  `GET /api/diagrams/{id}/tree`, `GET /api/diagrams/{id}/chat`,
+  `DELETE /api/diagrams/{id}/chat/messages/last` (undo).
+
+> ⚠️ Some CLI code still calls STALE paths that the backend has moved/removed
+> (`/api/diagrams?applicationId=`, `.../chat/last`, `.../meta`, `.../patch`). Those commands are
+> currently broken — see `docs/cli-modernization-plan.md` for the fixes.
 
 ## When you change things
 
 - Adding/altering a command → update `src/cli.rs`, the module in `src/commands/`, **and**
   `skills/SKILL.md` (command reference + JSON output schema + relevant workflow).
+- Adding/removing a consumed backend endpoint → update the contract list above **and** the
+  mirror list in `vaxis`'s `CLAUDE.md` (see the STRONG RULE).
 - Changing JSON output shape → grep `skills/SKILL.md` and `docs/` for the affected fields.
 - The npm `package.json` repository URL currently reads `github.com/unwita/vaxis-cli`; the
   real remote is `github.com/Unwita-Insights/vaxis-cli`.
+
+## Workflow preference (owner: Kaviya)
+
+- **Never commit contract/CLAUDE.md/cross-repo changes straight to `main` or an unrelated
+  branch.** Make them on a dedicated branch and open a PR. This applies in BOTH repos —
+  `vaxis-cli` and `vaxis`.
+- **Ask before pushing or opening a PR**, and confirm the base branch first (changes here start
+  from `main` unless told otherwise).
