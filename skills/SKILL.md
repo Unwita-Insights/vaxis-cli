@@ -98,10 +98,6 @@ vaxis diagrams delete --app-id <appId> --force
 # Get full Mermaid format reference (diagram types, syntax rules, limits)
 vaxis diagrams format --json
 
-# Apply a targeted diff — add/remove nodes and edges without rewriting the full Mermaid
-# Use this for small iterative changes to large diagrams (20+ nodes)
-vaxis diagrams patch <diagramId> --diff '{"add_nodes":[{"id":"cache","label":"Redis Cache"}],"add_edges":[{"from":"api","to":"cache","label":"read"}],"remove_nodes":[],"remove_edges":[],"update_labels":[]}' --json
-
 # Save raw user-provided Mermaid directly (no AI call)
 # Use when the user pastes Mermaid from another tool or provides it directly
 vaxis diagrams import <diagramId> --mermaid "graph TD\n    A[User] --> B[API]" --json
@@ -351,21 +347,19 @@ Never ask more than one clarifying question before proceeding.
    "Done — deleted Auth Service Prototype and its 2 child diagrams."
 ```
 
-### Workflow 14 — Patch a large diagram (safe iterative update)
+### Workflow 14 — Edit a large diagram (preserve every existing node)
 
 ```
-Use this instead of generate when the diagram has 20+ nodes and only a small change is needed.
+Use this when the diagram has many nodes and only a small change is needed.
+There is no diff/patch endpoint — you are the AI, so you make the edit yourself.
 
-1. vaxis diagrams show <diagramId> --json   → read current_mermaid and understand the node IDs
+1. vaxis diagrams show <diagramId> --json   → read current_mermaid and note every existing node ID
 
-2. vaxis diagrams patch <diagramId> --diff '{
-     "add_nodes": [{"id": "cache", "label": "Redis Cache"}],
-     "add_edges": [{"from": "api", "to": "cache", "label": "read"}],
-     "remove_nodes": [],
-     "remove_edges": [],
-     "update_labels": []
-   }' --json
-   → Returns updated full mermaid — no risk of rewriting existing nodes incorrectly
+2. Edit the Mermaid yourself: carry forward ALL existing nodes and edges unchanged,
+   then add / remove / modify only what the user asked for.
+
+3. vaxis diagrams generate <diagramId> --mermaid "<full updated mermaid>" --json
+   → Resend the COMPLETE diagram. Never drop a node the user didn't ask to remove (see Rule 14).
 ```
 
 ### Workflow 15 — Import user-provided Mermaid
@@ -488,7 +482,7 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
 - Max 50 nodes per diagram
 - Max 60 edges per diagram
 - When a diagram exceeds 30 nodes, use drill blocks to push subsystems into child diagrams
-- Use `patch` instead of `generate` for small changes to large diagrams
+- For small changes to large diagrams, edit `current_mermaid` and resend the full diagram via `generate --mermaid`, preserving every existing node (see Workflow 14)
 
 ---
 
@@ -592,14 +586,6 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
 }
 ```
 
-### `vaxis diagrams patch --json`
-```json
-{
-  "diagram_id": "diag_xxx",
-  "mermaid": "graph TD\n    A[User] --> B[API Gateway]\n    B --> C[Redis Cache]\n    ..."
-}
-```
-
 ### `vaxis diagrams undo --json`
 ```json
 { "ok": true, "diagram_id": "diag_xxx" }
@@ -641,7 +627,7 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
 
 1. **Always check before creating.** Run `vaxis apps list --json` before `apps create`. If a matching app exists, ask the user whether to continue it or start fresh. If the list is empty, guide the user into creation — do not ask them to create manually.
 
-2. **Always read before writing.** Run `vaxis diagrams show --json` before `generate` or `patch`. Use `current_mermaid` to understand what already exists. Never overwrite blindly.
+2. **Always read before writing.** Run `vaxis diagrams show --json` before `generate`. Use `current_mermaid` to understand what already exists. Never overwrite blindly.
 
 3. **Use tree to find the right diagram.** Never guess diagram IDs. Run `vaxis diagrams tree --json` to navigate to the correct level.
 
@@ -662,7 +648,7 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
    - Root diagrams use broad strokes (services, domains); child diagrams use fine detail (functions, data, steps)
    - Never produce a flat list of nodes with no edges — every diagram must show relationships
 
-9. **Use patch for targeted edits on large diagrams.** If the user asks to add or remove specific nodes and the diagram already has 20+ nodes, prefer `vaxis diagrams patch` over `generate`. This prevents accidentally rewriting or renaming existing nodes.
+9. **Edit large diagrams by regenerating with care.** If the user asks to add or remove specific nodes on a diagram that already has many nodes, read `current_mermaid` first, then resend the FULL updated Mermaid via `generate --mermaid` — carrying every existing node forward unchanged. There is no diff/patch endpoint; you are the AI, so you make the edit (see Workflow 14 and Rule 14).
 
 10. **End every session with a shareable link.** After completing a design session, call `vaxis apps share <appId> --json` and give the user the link directly. They should never need to open the web app to find it.
 

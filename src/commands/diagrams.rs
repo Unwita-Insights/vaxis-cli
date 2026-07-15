@@ -43,7 +43,6 @@ pub async fn run(action: DiagramsAction, json: bool) {
             delete(&token, &resolved, force, json).await;
         }
         DiagramsAction::Format                 => format_cmd(json),
-        DiagramsAction::Patch { id, diff }     => patch(&token, &id, &diff, json).await,
         DiagramsAction::Import { id, mermaid } => import_cmd(&token, &id, &mermaid, json).await,
     }
 }
@@ -600,47 +599,6 @@ fn format_cmd(_json: bool) {
         ]
     });
     println!("{}", serde_json::to_string_pretty(&spec).unwrap_or_default());
-}
-
-async fn patch(token: &str, id: &str, diff: &str, json: bool) {
-    let diff_val: serde_json::Value = match serde_json::from_str(diff) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("{} Invalid JSON in --diff: {}", "✗".red(), e);
-            std::process::exit(1);
-        }
-    };
-
-    let client = reqwest::Client::new();
-    let resp = match client
-        .post(format!("{}/api/diagrams/{}/patch", crate::config::base_url(), id))
-        .header("Authorization", format!("Bearer {}", token))
-        .json(&diff_val)
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
-    };
-
-    match resp.status().as_u16() {
-        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
-        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
-        200 => {
-            let result: serde_json::Value = resp.json().await.unwrap_or_default();
-            if json {
-                println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
-            } else {
-                println!("{} Patch applied", "✓".green().bold());
-                if let Some(mermaid) = result["mermaid"].as_str() {
-                    for line in mermaid.lines() {
-                        println!("  {}", line);
-                    }
-                }
-            }
-        }
-        s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
-    }
 }
 
 async fn import_cmd(token: &str, id: &str, mermaid: &str, json: bool) {
