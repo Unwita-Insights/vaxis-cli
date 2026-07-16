@@ -113,16 +113,18 @@ Endpoints the CLI is coupled to (backend's CURRENT paths):
 - **Auth:** `POST /api/cli/start`, `GET /api/cli/poll?state=`, `POST /api/cli/complete`,
   `Bearer <cli_token>` auth.
 - **Apps:** `GET|POST /api/applications`, `GET|PUT|DELETE /api/applications/{id}`,
-  `POST /api/applications/{id}/share`, `GET /api/applications/{id}/diagrams` (list diagrams).
+  `POST /api/applications/{id}/share` (returns `{token, edit_token}`; the CLI builds
+  `/view/{token}` and `/collab/{edit_token}`), `GET /api/applications/{id}/diagrams`
+  (list diagrams).
 - **Diagrams:** `POST /api/diagrams`, `GET|DELETE /api/diagrams/{id}`,
-  `PATCH /api/diagrams/{id}` (rename), `POST /api/diagrams/{id}/generate`,
+  `PATCH /api/diagrams/{id}` (rename), `POST /api/diagrams/{id}/generate`
+  (request may send `prompt` + `intent` + `chat_session_id`, or `mermaid` for the direct
+  path; `intent:"ask"` powers `diagrams ask` and returns an `answer` field),
   `POST /api/diagrams/{id}/children`, `POST /api/diagrams/{id}/import`,
   `GET /api/diagrams/{id}/tree`, `GET /api/diagrams/{id}/chat`,
+  `GET|POST /api/diagrams/{id}/chat/sessions` (sessions list/create),
+  `PATCH /api/diagrams/{id}/chat/sessions/{sid}` (session rename),
   `DELETE /api/diagrams/{id}/chat/messages/last` (undo).
-
-> ⚠️ Some CLI code still calls STALE paths that the backend has moved/removed
-> (`/api/diagrams?applicationId=`, `.../chat/last`, `.../meta`, `.../patch`). Those commands are
-> currently broken — see `docs/cli-modernization-plan.md` for the fixes.
 
 ## When you change things
 

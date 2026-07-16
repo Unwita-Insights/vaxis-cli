@@ -127,6 +127,34 @@ pub enum DiagramsAction {
         /// Provide Mermaid directly — server skips AI, still processes drill annotations
         #[arg(short, long, conflicts_with = "prompt")]
         mermaid: Option<String>,
+
+        /// Server-AI intent for the --prompt path: auto|edit|replace|drill|detail|simplify|ask (default auto)
+        #[arg(short, long, conflicts_with = "mermaid")]
+        intent: Option<String>,
+
+        /// Target an existing AI chat session (see `diagrams sessions`)
+        #[arg(short, long)]
+        session: Option<String>,
+    },
+
+    /// Ask a question about a diagram — server AI answers in prose, no edit
+    Ask {
+        /// Diagram ID
+        id: String,
+
+        /// The question to ask
+        #[arg(short, long)]
+        prompt: String,
+
+        /// Target an existing AI chat session (see `diagrams sessions`)
+        #[arg(short, long)]
+        session: Option<String>,
+    },
+
+    /// Manage AI chat sessions for a diagram
+    Sessions {
+        #[command(subcommand)]
+        action: SessionsAction,
     },
 
     /// Show a diagram's content and structure
@@ -181,5 +209,36 @@ pub enum DiagramsAction {
         /// Raw Mermaid source to save
         #[arg(long)]
         mermaid: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SessionsAction {
+    /// List the AI chat sessions for a diagram
+    List {
+        /// Diagram ID
+        id: String,
+    },
+
+    /// Start a new AI chat session on a diagram
+    Create {
+        /// Diagram ID
+        id: String,
+
+        /// Optional session title
+        #[arg(short, long)]
+        title: Option<String>,
+    },
+
+    /// Rename an AI chat session
+    Rename {
+        /// Diagram ID
+        id: String,
+
+        /// Session ID
+        session_id: String,
+
+        /// New title
+        title: String,
     },
 }

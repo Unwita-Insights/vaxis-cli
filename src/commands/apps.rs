@@ -264,17 +264,28 @@ async fn share(token: &str, id: &str, json: bool) {
         404 => { eprintln!("{} Application not found.", "✗".red()); std::process::exit(1); }
         200 => {
             let mut body: serde_json::Value = resp.json().await.unwrap_or_default();
+            let base = crate::config::base_url();
+            // The backend returns { token, edit_token }; it does not build URLs.
+            // View link is /view/<token>; the collaborative edit link is
+            // /collab/<edit_token> (mirrors the web app's share dialog).
             if body["url"].is_null() || body["url"].as_str().unwrap_or("").is_empty() {
                 if let Some(tok) = body["token"].as_str() {
-                    let constructed = format!("{}/view/{}", crate::config::base_url(), tok);
-                    body["url"] = serde_json::Value::String(constructed);
+                    body["url"] = serde_json::Value::String(format!("{}/view/{}", base, tok));
+                }
+            }
+            if let Some(etok) = body["edit_token"].as_str() {
+                if !etok.is_empty() {
+                    body["edit_url"] = serde_json::Value::String(format!("{}/collab/{}", base, etok));
                 }
             }
             if json {
                 println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
             } else {
                 let url = body["url"].as_str().unwrap_or("(no url returned)");
-                println!("{} Shareable link: {}", "✓".green().bold(), url.cyan());
+                println!("{} View link: {}", "✓".green().bold(), url.cyan());
+                if let Some(edit_url) = body["edit_url"].as_str() {
+                    println!("{} Edit link: {}", "✓".green().bold(), edit_url.cyan());
+                }
             }
         }
         s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }

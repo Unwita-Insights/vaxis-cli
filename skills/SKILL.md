@@ -77,6 +77,17 @@ vaxis diagrams generate <diagramId> --mermaid "graph TD
 
 # Server AI generates (use only when testing server AI directly, not when Claude is the AI)
 vaxis diagrams generate <diagramId> --prompt "Design a payment service with Stripe integration" --json
+# Server-AI intent + chat session are optional (server-AI path only). Default intent is `auto`.
+#   --intent auto|edit|replace|drill|detail|simplify|ask   --session <chatSessionId>
+vaxis diagrams generate <diagramId> --prompt "add a Redis cache between api and db" --intent edit --json
+
+# Ask a question about a diagram — server AI answers in prose, makes no edit
+vaxis diagrams ask <diagramId> --prompt "What talks to the database?" --json
+
+# AI chat sessions (server-AI conversation threads on a diagram)
+vaxis diagrams sessions list <diagramId> --json
+vaxis diagrams sessions create <diagramId> --title "Refactor pass" --json
+vaxis diagrams sessions rename <diagramId> <sessionId> "New title" --json
 
 # Show diagram content (includes current Mermaid + child nodes)
 vaxis diagrams show <diagramId> --json
@@ -510,7 +521,26 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
 {
   "url": "https://beta.vaxis.dev/view/abc123xyz",
   "token": "abc123xyz",
+  "edit_url": "https://beta.vaxis.dev/collab/def456uvw",
+  "edit_token": "def456uvw",
   "created_at": "2026-06-04T10:00:00Z"
+}
+```
+`url`/`token` are the read-only view link; `edit_url`/`edit_token` are the collaborative
+edit link. Give people the plain `url` unless they need to edit.
+
+### `vaxis diagrams ask --json`
+```json
+{ "answer": "The API Gateway and the Payment Service both write to PostgreSQL.", "unchanged": true, "chat_session_id": "sess_xxx" }
+```
+
+### `vaxis diagrams sessions list --json`
+```json
+{
+  "sessions": [
+    { "id": "sess_xxx", "title": "Main", "is_active": 1, "message_count": 4, "created_at": "...", "updated_at": "..." }
+  ],
+  "active_chat_session_id": "sess_xxx"
 }
 ```
 

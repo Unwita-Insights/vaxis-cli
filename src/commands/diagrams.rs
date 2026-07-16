@@ -1,6 +1,6 @@
 use colored::Colorize;
 use dialoguer::{Select, Confirm, theme::ColorfulTheme};
-use crate::cli::DiagramsAction;
+use crate::cli::{DiagramsAction, SessionsAction};
 use crate::config;
 
 fn auth_token() -> Option<String> {
@@ -30,7 +30,7 @@ pub async fn run(action: DiagramsAction, json: bool) {
     match action {
         DiagramsAction::List { app_id }           => list(&token, &app_id, json).await,
         DiagramsAction::Create { app_id, name }   => create(&token, &app_id, &name, json).await,
-        DiagramsAction::Generate { id, prompt, mermaid } => {
+        DiagramsAction::Generate { id, prompt, mermaid, intent, session } => {
             if prompt.is_none() && mermaid.is_none() {
                 if json {
                     println!("{}", serde_json::json!({"error": "provide --prompt or --mermaid"}));
@@ -39,8 +39,14 @@ pub async fn run(action: DiagramsAction, json: bool) {
                 }
                 std::process::exit(1);
             }
-            generate(&token, &id, prompt.as_deref(), mermaid.as_deref(), json).await
+            generate(&token, &id, prompt.as_deref(), mermaid.as_deref(), intent.as_deref(), session.as_deref(), json).await
         }
+        DiagramsAction::Ask { id, prompt, session } => ask(&token, &id, &prompt, session.as_deref(), json).await,
+        DiagramsAction::Sessions { action }       => match action {
+            SessionsAction::List { id }                       => sessions_list(&token, &id, json).await,
+            SessionsAction::Create { id, title }              => sessions_create(&token, &id, title.as_deref(), json).await,
+            SessionsAction::Rename { id, session_id, title }  => sessions_rename(&token, &id, &session_id, &title, json).await,
+        },
         DiagramsAction::Show { id }               => show(&token, &id, json).await,
         DiagramsAction::Tree { id }               => tree_cmd(&token, &id, json).await,
         DiagramsAction::Undo { id }               => undo(&token, &id, json).await,
@@ -345,14 +351,33 @@ fn print_tree(node: &serde_json::Value, prefix: &str, is_last: bool) {
     }
 }
 
-async fn generate(token: &str, id: &str, prompt: Option<&str>, mermaid: Option<&str>, json: bool) {
-    let body = if let Some(m) = mermaid {
+async fn generate(
+    token: &str,
+    id: &str,
+    prompt: Option<&str>,
+    mermaid: Option<&str>,
+    intent: Option<&str>,
+    session: Option<&str>,
+    json: bool,
+) {
+    let mut body = if let Some(m) = mermaid {
+        // Direct-Mermaid path: the server stores the Mermaid without invoking the
+        // AI, so `intent` is meaningless here and is ignored (clap also forbids
+        // pairing --intent with --mermaid).
         if !json { println!("{}", "Saving diagram...".dimmed()); }
         serde_json::json!({ "mermaid": m })
     } else {
         if !json { println!("{}", "Generating...".dimmed()); }
-        serde_json::json!({ "prompt": prompt.unwrap_or("") })
+        let mut b = serde_json::json!({ "prompt": prompt.unwrap_or("") });
+        if let Some(i) = intent {
+            b["intent"] = serde_json::Value::String(i.to_string());
+        }
+        b
     };
+    // A chat session can be targeted on either path.
+    if let Some(s) = session {
+        body["chat_session_id"] = serde_json::Value::String(s.to_string());
+    }
 
     let client = reqwest::Client::new();
     let resp = match client
@@ -469,6 +494,194 @@ async fn generate(token: &str, id: &str, prompt: Option<&str>, mermaid: Option<&
             let cid  = d["diagram_id"].as_str().unwrap_or("").dimmed();
             println!("    {} → {}", node, cid);
         }
+    }
+}
+
+async fn ask(token: &str, id: &str, prompt: &str, session: Option<&str>, json: bool) {
+    // Ask mode is the generate endpoint with intent "ask": the server answers in
+    // prose and makes no edit to the diagram (`unchanged: true`, `answer: "..."`).
+    let mut body = serde_json::json!({ "prompt": prompt, "intent": "ask" });
+    if let Some(s) = session {
+        body["chat_session_id"] = serde_json::Value::String(s.to_string());
+    }
+    if !json { println!("{}", "Asking...".dimmed()); }
+
+    let client = reqwest::Client::new();
+    let resp = match client
+        .post(format!("{}/api/diagrams/{}/generate", crate::config::base_url(), id))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+    };
+
+    let status = resp.status().as_u16();
+    let result: serde_json::Value = resp.json().await.unwrap_or_default();
+
+    match status {
+        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
+        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        200 | 201 => {}
+        429 => {
+            let msg = result["error"]["message"].as_str()
+                .or_else(|| result["error"].as_str())
+                .unwrap_or("You're generating too fast — wait a minute and try again.");
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+            } else {
+                eprintln!("{} Rate limited: {}", "⚠".yellow(), msg);
+            }
+            std::process::exit(1);
+        }
+        _ => {
+            let msg = result["error"]["message"].as_str()
+                .or_else(|| result["error"].as_str())
+                .unwrap_or("unexpected server error");
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+            } else {
+                eprintln!("{} Ask failed (HTTP {}): {}", "✗".red(), status, msg);
+            }
+            std::process::exit(1);
+        }
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+        return;
+    }
+
+    // `answer` is the prose reply; some no-op turns use `notice` instead.
+    let answer = result["answer"].as_str()
+        .or_else(|| result["notice"].as_str())
+        .unwrap_or("(no answer returned)");
+    println!();
+    for line in answer.lines() {
+        println!("  {}", line);
+    }
+}
+
+async fn sessions_list(token: &str, id: &str, json: bool) {
+    let client = reqwest::Client::new();
+    let resp = match client
+        .get(format!("{}/api/diagrams/{}/chat/sessions", crate::config::base_url(), id))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+    };
+
+    match resp.status().as_u16() {
+        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
+        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        200 => {}
+        s => { eprintln!("{} Could not list sessions (HTTP {}).", "✗".red(), s); std::process::exit(1); }
+    }
+
+    let data: serde_json::Value = resp.json().await.unwrap_or_default();
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&data).unwrap_or_default());
+        return;
+    }
+
+    let active = data["active_chat_session_id"].as_str().unwrap_or("");
+    let sessions = data["sessions"].as_array().cloned().unwrap_or_default();
+    if sessions.is_empty() {
+        println!("{}", "No chat sessions yet. Start one with: vaxis diagrams sessions create <id>".dimmed());
+        return;
+    }
+
+    println!("{}", "─".repeat(56).dimmed());
+    for s in &sessions {
+        let sid   = s["id"].as_str().unwrap_or("");
+        let title = s["title"].as_str().unwrap_or("Untitled");
+        let count = s["message_count"].as_u64().unwrap_or(0);
+        let marker = if sid == active { "●".green().to_string() } else { " ".to_string() };
+        println!("  {} {}  {} {}",
+            marker,
+            title.bold(),
+            sid.dimmed(),
+            format!("({} msg{})", count, if count == 1 { "" } else { "s" }).dimmed());
+    }
+    println!("{}", "─".repeat(56).dimmed());
+    println!("  {} session{}  {}",
+        sessions.len().to_string().cyan(),
+        if sessions.len() == 1 { "" } else { "s" },
+        "(● = active)".dimmed());
+}
+
+async fn sessions_create(token: &str, id: &str, title: Option<&str>, json: bool) {
+    let mut body = serde_json::Map::new();
+    if let Some(t) = title {
+        body.insert("title".into(), t.into());
+    }
+
+    let client = reqwest::Client::new();
+    let resp = match client
+        .post(format!("{}/api/diagrams/{}/chat/sessions", crate::config::base_url(), id))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+    };
+
+    match resp.status().as_u16() {
+        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
+        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        200 | 201 => {}
+        s => { eprintln!("{} Could not create session (HTTP {}).", "✗".red(), s); std::process::exit(1); }
+    }
+
+    let data: serde_json::Value = resp.json().await.unwrap_or_default();
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&data).unwrap_or_default());
+        return;
+    }
+
+    let session = &data["session"];
+    println!(
+        "{} Created chat session {} {}",
+        "✓".green().bold(),
+        session["title"].as_str().unwrap_or("Untitled").green(),
+        session["id"].as_str().unwrap_or("").dimmed()
+    );
+}
+
+async fn sessions_rename(token: &str, id: &str, session_id: &str, title: &str, json: bool) {
+    let client = reqwest::Client::new();
+    let resp = match client
+        .patch(format!("{}/api/diagrams/{}/chat/sessions/{}", crate::config::base_url(), id, session_id))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({ "title": title }))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+    };
+
+    match resp.status().as_u16() {
+        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
+        404 => { eprintln!("{} Diagram or session not found.", "✗".red()); std::process::exit(1); }
+        200 => {
+            if json {
+                let data: serde_json::Value = resp.json().await.unwrap_or_default();
+                println!("{}", serde_json::to_string_pretty(&data).unwrap_or_default());
+            } else {
+                println!("{} Session renamed to {}", "✓".green().bold(), title.green());
+            }
+        }
+        s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
     }
 }
 
