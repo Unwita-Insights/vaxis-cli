@@ -48,8 +48,9 @@ vaxis apps update <id> --description "New description" --json
 # Delete an application
 vaxis apps delete <id> --force
 
-# Get or create the public shareable link for an application
+# Inspect or revoke a LEGACY app-wide link (retired — cannot create one)
 vaxis apps share <appId> --json
+vaxis apps share <appId> --revoke --json
 ```
 
 ### Diagrams
@@ -60,6 +61,13 @@ vaxis diagrams list <appId> --json
 
 # Create a new diagram
 vaxis diagrams create <appId> "Diagram Name" --json
+
+# Share a diagram (this is THE share command — one link unlocks this diagram
+# plus the sub-diagrams it drills into). Safe to call repeatedly: it returns the
+# existing link if there is one, and only creates a link when there is none.
+vaxis diagrams share <diagramId> --json
+vaxis diagrams share <diagramId> --rotate --json   # mint a new link, breaking the old one
+vaxis diagrams share <diagramId> --revoke --json   # turn sharing off
 
 # Claude provides Mermaid directly (preferred — Claude is the AI, Vaxis stores + processes drills)
 vaxis diagrams generate <diagramId> --mermaid "graph TD
@@ -138,8 +146,9 @@ vaxis diagrams import <diagramId> --mermaid "graph TD\n    A[User] --> B[API]" -
 
 5. Tell the user what was created. Offer to drill into any subsystem.
 
-6. vaxis apps share <APP_ID> --json
-   → Give the user the shareable link at the end of the session
+6. vaxis diagrams share <ROOT_ID> --json
+   → Give the user the shareable link at the end of the session. Share the ROOT
+     diagram — the link covers the diagrams it drills into.
 ```
 
 ### Workflow 2 — Select project when user hasn't specified one
@@ -391,7 +400,7 @@ Use when the user pastes raw Mermaid into the chat or provides it from another t
 ### Workflow 16 — End session with shareable link
 
 ```
-1. vaxis apps share <appId> --json
+1. vaxis diagrams share <rootDiagramId> --json
    → Returns { "url": "https://beta.vaxis.dev/view/abc123xyz", ... }
 
 2. Give the user the link directly in the chat:
@@ -516,18 +525,36 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
 { "id": "app_xxx", "name": "Payment System", "description": "...", "created_at": "..." }
 ```
 
-### `vaxis apps share --json`
+### `vaxis diagrams share --json`
 ```json
 {
+  "diagram_id": "dgm_xxx",
+  "shared": true,
   "url": "https://beta.vaxis.dev/view/abc123xyz",
   "token": "abc123xyz",
   "edit_url": "https://beta.vaxis.dev/collab/def456uvw",
-  "edit_token": "def456uvw",
-  "created_at": "2026-06-04T10:00:00Z"
+  "edit_token": "def456uvw"
 }
 ```
 `url`/`token` are the read-only view link; `edit_url`/`edit_token` are the collaborative
 edit link. Give people the plain `url` unless they need to edit.
+
+`--revoke` returns `{ "ok": true, "diagram_id": "...", "shared": false }`.
+
+### `vaxis apps share --json`
+App-wide sharing is **retired** — this command can no longer create a link. It only
+reports (and with `--revoke` turns off) a legacy link minted before the cutover:
+```json
+{
+  "id": "app_xxx",
+  "app_share_retired": true,
+  "use_instead": "vaxis diagrams share <diagramId>",
+  "legacy_shared": false
+}
+```
+When `legacy_shared` is `true`, `legacy_url`/`legacy_token` (and the `legacy_edit_*`
+pair) are also present. A legacy link exposes **every** diagram in the app — if you
+find one, tell the user and offer `vaxis apps share <appId> --revoke`.
 
 ### `vaxis diagrams ask --json`
 ```json
@@ -583,6 +610,25 @@ edit link. Give people the plain `url` unless they need to edit.
   ]
 }
 ```
+
+**A `--prompt` generate does not always edit the diagram.** The server routes the turn
+to Ask when `--intent ask` is given *or* when the intent is `auto` (the default) and the
+prompt reads as a question. It also declines no-op or mode-mismatched turns. Those
+responses look like this instead — note `unchanged: true` and the empty `drills`:
+```json
+{
+  "diagram_id": "diag_xxx",
+  "mermaid": "graph TD\n    ...",
+  "drills": [],
+  "unchanged": true,
+  "answer": "The auth service validates the JWT before the gateway routes ..."
+}
+```
+When `unchanged` is `true`, **`mermaid` is the diagram's existing content echoed back, not
+a new version — do not treat it as an edit and do not report one.** Surface `answer` (or
+`notice` / `mode_mismatch.message` when there is no `answer`) to the user. If you wanted an
+edit, re-run with an explicit `--intent edit|replace|drill`, or supply `--mermaid` yourself.
+The `--mermaid` path never routes to Ask.
 
 ### `vaxis diagrams tree --json`
 ```json
@@ -685,7 +731,7 @@ edit link. Give people the plain `url` unless they need to edit.
 
 9. **Edit large diagrams by regenerating with care.** If the user asks to add or remove specific nodes on a diagram that already has many nodes, read `current_mermaid` first, then resend the FULL updated Mermaid via `generate --mermaid` — carrying every existing node forward unchanged. There is no diff/patch endpoint; you are the AI, so you make the edit (see Workflow 14 and Rule 14).
 
-10. **End every session with a shareable link.** After completing a design session, call `vaxis apps share <appId> --json` and give the user the link directly. They should never need to open the web app to find it.
+10. **End every session with a shareable link.** After completing a design session, call `vaxis diagrams share <rootDiagramId> --json` and give the user the link directly. They should never need to open the web app to find it. Share the ROOT diagram — one link covers the sub-diagrams it drills into. Never `--rotate` just to fetch a link; a plain `share` already returns the existing one, and rotating breaks links the user has handed out.
 
 11. **Reuse context before fetching.** If diagram IDs or app IDs were established earlier in the conversation, use them directly. Only re-fetch with `apps list` or `diagrams list` when the context is genuinely unclear.
 

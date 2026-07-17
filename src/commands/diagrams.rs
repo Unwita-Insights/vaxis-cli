@@ -47,6 +47,7 @@ pub async fn run(action: DiagramsAction, json: bool) {
             SessionsAction::Create { id, title }              => sessions_create(&token, &id, title.as_deref(), json).await,
             SessionsAction::Rename { id, session_id, title }  => sessions_rename(&token, &id, &session_id, &title, json).await,
         },
+        DiagramsAction::Share { id, rotate, revoke } => share(&token, &id, rotate, revoke, json).await,
         DiagramsAction::Show { id }               => show(&token, &id, json).await,
         DiagramsAction::Tree { id }               => tree_cmd(&token, &id, json).await,
         DiagramsAction::Undo { id }               => undo(&token, &id, json).await,
@@ -427,6 +428,52 @@ async fn generate(
     let mermaid = result["mermaid"].as_str().unwrap_or("").to_string();
     let drills  = result["drills"].as_array().cloned().unwrap_or_default();
 
+    // A generate turn does not always edit the diagram. The server routes to Ask
+    // whenever intent is "ask" OR intent is "auto" (the default) and the prompt
+    // reads as a question — and it answers in prose with `unchanged: true`, an
+    // `answer`, and the CURRENT mermaid echoed back. `notice` (no-op/refusal) and
+    // `mode_mismatch` (the intent can't do what was asked) are the other no-edit
+    // turns. Treating any of these as a successful edit would report "Generated"
+    // over unchanged Mermaid and throw the answer away, so they return early.
+    let unchanged = result["unchanged"].as_bool().unwrap_or(false);
+    let answer    = result["answer"].as_str();
+    let notice    = result["notice"].as_str();
+    let mismatch  = result["mode_mismatch"]["message"].as_str();
+
+    if unchanged || answer.is_some() {
+        if json {
+            let mut out = serde_json::json!({
+                "diagram_id": id,
+                "mermaid":    mermaid,
+                "drills":     [],
+                "unchanged":  true,
+            });
+            if let Some(a) = answer   { out["answer"] = serde_json::Value::String(a.to_string()); }
+            if let Some(n) = notice   { out["notice"] = serde_json::Value::String(n.to_string()); }
+            if let Some(m) = result.get("mode_mismatch") {
+                if !m.is_null() { out["mode_mismatch"] = m.clone(); }
+            }
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+            return;
+        }
+
+        match answer.or(mismatch).or(notice) {
+            Some(text) => {
+                println!("\n{} The diagram was not changed — the server answered instead:\n",
+                    "ℹ".cyan().bold());
+                for line in text.lines() {
+                    println!("  {}", line);
+                }
+                if answer.is_some() {
+                    println!("\n{}", "Use `vaxis diagrams ask` for questions, or an explicit \
+                                      --intent edit|replace|drill to change the diagram.".dimmed());
+                }
+            }
+            None => println!("{} No change was made to the diagram.", "ℹ".cyan().bold()),
+        }
+        return;
+    }
+
     // Create child diagrams for every drill block the AI returned
     let mut created_drills: Vec<serde_json::Value> = Vec::new();
     for drill in &drills {
@@ -494,6 +541,131 @@ async fn generate(
             let cid  = d["diagram_id"].as_str().unwrap_or("").dimmed();
             println!("    {} → {}", node, cid);
         }
+    }
+}
+
+// Sharing is per-diagram: one link unlocks this diagram plus the sub-diagrams it
+// drills into. `POST /share` always mints a fresh token pair (it is create-OR-ROTATE,
+// not get-or-create), so a plain `share` reads the existing link first and only
+// POSTs when there is none — otherwise repeat calls would silently invalidate a
+// link that is already handed out. `--rotate` asks for that new token explicitly.
+async fn share(token: &str, id: &str, rotate: bool, revoke: bool, json: bool) {
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/diagrams/{}/share", crate::config::base_url(), id);
+
+    if revoke {
+        let resp = match client
+            .delete(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        };
+        match resp.status().as_u16() {
+            401 => { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); std::process::exit(1); }
+            404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+            200 => {
+                if json {
+                    println!("{}", serde_json::json!({"ok": true, "diagram_id": id, "shared": false}));
+                } else {
+                    println!("{} Sharing disabled for {}", "✓".green().bold(), id.dimmed());
+                }
+            }
+            s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+        }
+        return;
+    }
+
+    // Read the current token unless the caller explicitly asked to rotate.
+    if !rotate {
+        let resp = match client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        };
+        match resp.status().as_u16() {
+            401 => { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); std::process::exit(1); }
+            404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+            200 => {
+                let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                if let Some(tok) = share_token(&body, "token") {
+                    print_share_links(id, &tok, share_token(&body, "edit_token").as_deref(), false, json);
+                    return;
+                }
+                // Not shared yet — fall through and create the first link.
+            }
+            s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+        }
+    }
+
+    let resp = match client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+    };
+
+    match resp.status().as_u16() {
+        401 => { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); std::process::exit(1); }
+        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        200 | 201 => {
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            let tok = match share_token(&body, "token") {
+                Some(t) => t,
+                None => { eprintln!("{} Server returned no share token.", "✗".red()); std::process::exit(1); }
+            };
+            print_share_links(id, &tok, share_token(&body, "edit_token").as_deref(), rotate, json);
+        }
+        s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+    }
+}
+
+// The share endpoints return `null` for an unshared diagram, and some payloads
+// carry the string "null" — treat both, and the empty string, as "no token".
+fn share_token(body: &serde_json::Value, field: &str) -> Option<String> {
+    match body[field].as_str() {
+        Some(t) if !t.is_empty() && t != "null" => Some(t.to_string()),
+        _ => None,
+    }
+}
+
+// The backend returns tokens only; the CLI builds the URLs, matching the web
+// share dialog: /view/<token> is read-only, /collab/<edit_token> can edit.
+fn print_share_links(id: &str, token: &str, edit_token: Option<&str>, rotated: bool, json: bool) {
+    let base = crate::config::base_url();
+    let view_url = format!("{}/view/{}", base, token);
+    let edit_url = edit_token.map(|t| format!("{}/collab/{}", base, t));
+
+    if json {
+        let mut out = serde_json::json!({
+            "diagram_id": id,
+            "shared": true,
+            "url": view_url,
+            "token": token,
+        });
+        if let (Some(t), Some(u)) = (edit_token, edit_url.as_ref()) {
+            out["edit_token"] = serde_json::Value::String(t.to_string());
+            out["edit_url"]   = serde_json::Value::String(u.clone());
+        }
+        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        return;
+    }
+
+    if rotated {
+        println!("{} New link minted — the previous one no longer works.", "⚠".yellow());
+    }
+    println!("{} View link: {}", "✓".green().bold(), view_url.cyan());
+    if let Some(u) = edit_url {
+        println!("{} Edit link: {}", "✓".green().bold(), u.cyan());
     }
 }
 

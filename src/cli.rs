@@ -91,10 +91,14 @@ pub enum AppsAction {
         force: bool,
     },
 
-    /// Get or create the public shareable link for an application
+    /// Inspect or revoke a legacy app-wide share link (retired — see `diagrams share`)
     Share {
         /// Application ID
         id: String,
+
+        /// Revoke the legacy app-wide link
+        #[arg(long)]
+        revoke: bool,
     },
 }
 
@@ -155,6 +159,20 @@ pub enum DiagramsAction {
     Sessions {
         #[command(subcommand)]
         action: SessionsAction,
+    },
+
+    /// Get, create, rotate or revoke a diagram's public share link
+    Share {
+        /// Diagram ID
+        id: String,
+
+        /// Mint a new link, invalidating the existing one
+        #[arg(long, conflicts_with = "revoke")]
+        rotate: bool,
+
+        /// Turn sharing off for this diagram
+        #[arg(long, conflicts_with = "rotate")]
+        revoke: bool,
     },
 
     /// Show a diagram's content and structure
