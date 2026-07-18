@@ -439,6 +439,9 @@ async fn generate(
     let answer    = result["answer"].as_str();
     let notice    = result["notice"].as_str();
     let mismatch  = result["mode_mismatch"]["message"].as_str();
+    // The server assigns/echoes the chat session this turn ran in. Surface it so
+    // a caller can target the same session later with `--session`.
+    let chat_session_id = result["chat_session_id"].as_str();
 
     if unchanged || answer.is_some() {
         if json {
@@ -450,6 +453,7 @@ async fn generate(
             });
             if let Some(a) = answer   { out["answer"] = serde_json::Value::String(a.to_string()); }
             if let Some(n) = notice   { out["notice"] = serde_json::Value::String(n.to_string()); }
+            if let Some(s) = chat_session_id { out["chat_session_id"] = serde_json::Value::String(s.to_string()); }
             if let Some(m) = result.get("mode_mismatch") {
                 if !m.is_null() { out["mode_mismatch"] = m.clone(); }
             }
@@ -516,11 +520,13 @@ async fn generate(
     }
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+        let mut out = serde_json::json!({
             "diagram_id": id,
             "mermaid":    mermaid,
             "drills":     created_drills
-        })).unwrap_or_default());
+        });
+        if let Some(s) = chat_session_id { out["chat_session_id"] = serde_json::Value::String(s.to_string()); }
+        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
         return;
     }
 
@@ -578,31 +584,37 @@ async fn share(token: &str, id: &str, rotate: bool, revoke: bool, json: bool) {
         return;
     }
 
-    // Read the current token unless the caller explicitly asked to rotate.
-    if !rotate {
-        let resp = match client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", token))
-            .send()
-            .await
-        {
-            Ok(r) => r,
-            Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
-        };
-        match resp.status().as_u16() {
-            401 => { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); std::process::exit(1); }
-            404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
-            200 => {
-                let body: serde_json::Value = resp.json().await.unwrap_or_default();
-                if let Some(tok) = share_token(&body, "token") {
-                    print_share_links(id, &tok, share_token(&body, "edit_token").as_deref(), false, json);
-                    return;
+    // Always read current state first. A plain `share` returns the existing link
+    // (never rotating it), and reading first is also what lets `--rotate` tell
+    // whether it actually replaced a live link or just minted the first one — so
+    // the "previous link no longer works" warning is only shown when it's true.
+    let get_resp = match client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+    };
+    let had_link = match get_resp.status().as_u16() {
+        401 => { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); std::process::exit(1); }
+        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        200 => {
+            let body: serde_json::Value = get_resp.json().await.unwrap_or_default();
+            match share_token(&body, "token") {
+                Some(tok) => {
+                    if !rotate {
+                        print_share_links(id, &tok, share_token(&body, "edit_token").as_deref(), false, json);
+                        return;
+                    }
+                    true // a live link exists and the caller asked to rotate it
                 }
-                // Not shared yet — fall through and create the first link.
+                None => false, // not shared yet — the POST below mints the first link
             }
-            s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
         }
-    }
+        s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+    };
 
     let resp = match client
         .post(&url)
@@ -623,7 +635,7 @@ async fn share(token: &str, id: &str, rotate: bool, revoke: bool, json: bool) {
                 Some(t) => t,
                 None => { eprintln!("{} Server returned no share token.", "✗".red()); std::process::exit(1); }
             };
-            print_share_links(id, &tok, share_token(&body, "edit_token").as_deref(), rotate, json);
+            print_share_links(id, &tok, share_token(&body, "edit_token").as_deref(), had_link, json);
         }
         s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
     }
@@ -640,7 +652,7 @@ fn share_token(body: &serde_json::Value, field: &str) -> Option<String> {
 
 // The backend returns tokens only; the CLI builds the URLs, matching the web
 // share dialog: /view/<token> is read-only, /collab/<edit_token> can edit.
-fn print_share_links(id: &str, token: &str, edit_token: Option<&str>, rotated: bool, json: bool) {
+fn print_share_links(id: &str, token: &str, edit_token: Option<&str>, replaced: bool, json: bool) {
     let base = crate::config::base_url();
     let view_url = format!("{}/view/{}", base, token);
     let edit_url = edit_token.map(|t| format!("{}/collab/{}", base, t));
@@ -660,7 +672,7 @@ fn print_share_links(id: &str, token: &str, edit_token: Option<&str>, rotated: b
         return;
     }
 
-    if rotated {
+    if replaced {
         println!("{} New link minted — the previous one no longer works.", "⚠".yellow());
     }
     println!("{} View link: {}", "✓".green().bold(), view_url.cyan());
@@ -726,13 +738,20 @@ async fn ask(token: &str, id: &str, prompt: &str, session: Option<&str>, json: b
         return;
     }
 
-    // `answer` is the prose reply; some no-op turns use `notice` instead.
-    let answer = result["answer"].as_str()
-        .or_else(|| result["notice"].as_str())
-        .unwrap_or("(no answer returned)");
-    println!();
-    for line in answer.lines() {
-        println!("  {}", line);
+    // `answer` is the prose reply; some no-op turns use `notice` instead. Ask
+    // forces intent "ask", so the server should always answer in prose — if it
+    // returned neither, say so plainly rather than printing a bare placeholder.
+    match result["answer"].as_str().or_else(|| result["notice"].as_str()) {
+        Some(text) => {
+            println!();
+            for line in text.lines() {
+                println!("  {}", line);
+            }
+        }
+        None => {
+            eprintln!("{} The server returned no answer for this question.", "⚠".yellow());
+            std::process::exit(1);
+        }
     }
 }
 
