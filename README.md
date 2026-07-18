@@ -2,7 +2,7 @@
 
 **Diagram and architecture design, driven by your AI assistant.**
 
-`vaxis` is a command-line client for [Vaxis](https://beta.vaxis.dev) — a hosted tool for
+`vaxis` is a command-line client for [Vaxis](https://app.vaxis.dev) — a hosted tool for
 designing systems as Mermaid diagrams. It's built to be used *by an AI assistant* (like
 Claude): the assistant generates the diagram, and Vaxis stores it, breaks large systems into
 a navigable tree of sub-diagrams, and gives you a shareable link. You can also use it
@@ -123,7 +123,7 @@ Every command accepts a global `--json` flag for machine-readable output.
 - **Config file:** `~/.config/vaxis/config.toml` (Linux/macOS) or `%APPDATA%\vaxis\config.toml`
   (Windows). Stores the server URL and your login token.
 - **Server URL precedence:** `VAXIS_AUTH_URL` environment variable →
-  `auth_url` in the config file → default `https://beta.vaxis.dev`.
+  `auth_url` in the config file → default `https://app.vaxis.dev`.
 
 ```bash
 # Point at a local backend during development

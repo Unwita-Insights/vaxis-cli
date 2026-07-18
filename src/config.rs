@@ -45,7 +45,7 @@ pub fn clear() {
     }
 }
 
-pub const DEFAULT_AUTH_URL: &str = "https://beta.vaxis.dev";
+pub const DEFAULT_AUTH_URL: &str = "https://app.vaxis.dev";
 
 pub fn base_url() -> String {
     std::env::var("VAXIS_AUTH_URL")

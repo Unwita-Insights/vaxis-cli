@@ -5,7 +5,7 @@ Guidance for Claude Code when working in the `vaxis-cli` repository.
 ## What this is
 
 `vaxis-cli` is the Rust command-line client for **Vaxis**, a hosted diagram/architecture
-design SaaS (Cloudflare Workers API + D1, default host `https://beta.vaxis.dev`). The CLI
+design SaaS (Cloudflare Workers API + D1, default host `https://app.vaxis.dev`). The CLI
 is a thin, auth-aware HTTP client — it renders nothing and runs no AI locally. Its purpose
 is to be **driven by an AI assistant (Claude)**: Claude generates Mermaid, and Vaxis
 persists it, auto-expands "drill" subsystems into a diagram tree, and returns a share link.
@@ -71,7 +71,7 @@ src/
   `{"error":"not_authenticated"}` (JSON) or a login hint (human) before exiting.
 - **Config file**: `<OS config dir>/vaxis/config.toml` via the `dirs` crate. Holds `auth_url`
   and `user { name, email, token }`. `load()` never panics — malformed/missing → default.
-- **Base URL precedence**: `VAXIS_AUTH_URL` env → `auth_url` in config → `https://beta.vaxis.dev`.
+- **Base URL precedence**: `VAXIS_AUTH_URL` env → `auth_url` in config → `https://app.vaxis.dev`.
 - **Interactive pickers**: `apps`/`diagrams` delete/update accept an optional id; when omitted,
   a `dialoguer::Select`/`Input`/`Confirm` prompt appears. A cancelled prompt exits cleanly (0).
   Guard interactive prompts so they don't fire in `--json`/scripting mode (see `diagrams delete`).
