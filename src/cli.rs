@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(name = "vaxis")]
@@ -11,6 +11,34 @@ pub struct Cli {
     /// Output raw JSON (for scripting and AI agents)
     #[arg(long, global = true)]
     pub json: bool,
+}
+
+/// Server-AI intent for `diagrams generate --prompt`. Validated here so a typo
+/// is rejected before any network call. The value maps 1:1 to the string the
+/// backend's `/generate` endpoint expects.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum Intent {
+    Auto,
+    Edit,
+    Replace,
+    Drill,
+    Detail,
+    Simplify,
+    Ask,
+}
+
+impl Intent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Intent::Auto => "auto",
+            Intent::Edit => "edit",
+            Intent::Replace => "replace",
+            Intent::Drill => "drill",
+            Intent::Detail => "detail",
+            Intent::Simplify => "simplify",
+            Intent::Ask => "ask",
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -132,9 +160,9 @@ pub enum DiagramsAction {
         #[arg(short, long, conflicts_with = "prompt")]
         mermaid: Option<String>,
 
-        /// Server-AI intent for the --prompt path: auto|edit|replace|drill|detail|simplify|ask (default auto)
-        #[arg(short, long, conflicts_with = "mermaid")]
-        intent: Option<String>,
+        /// Server-AI intent for the --prompt path (default: auto)
+        #[arg(short, long, conflicts_with = "mermaid", value_enum)]
+        intent: Option<Intent>,
 
         /// Target an existing AI chat session (see `diagrams sessions`)
         #[arg(short, long)]

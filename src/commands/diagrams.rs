@@ -39,7 +39,7 @@ pub async fn run(action: DiagramsAction, json: bool) {
                 }
                 std::process::exit(1);
             }
-            generate(&token, &id, prompt.as_deref(), mermaid.as_deref(), intent.as_deref(), session.as_deref(), json).await
+            generate(&token, &id, prompt.as_deref(), mermaid.as_deref(), intent.map(|i| i.as_str()), session.as_deref(), json).await
         }
         DiagramsAction::Ask { id, prompt, session } => ask(&token, &id, &prompt, session.as_deref(), json).await,
         DiagramsAction::Sessions { action }       => match action {
@@ -443,13 +443,25 @@ async fn generate(
     // a caller can target the same session later with `--session`.
     let chat_session_id = result["chat_session_id"].as_str();
 
-    if unchanged || answer.is_some() {
+    // A generate turn is a NON-edit when any of these hold:
+    //   - `unchanged`     — hint-fallback / too-large / dropped-nodes / no-op / mode_mismatch
+    //   - `answer`        — Ask-mode prose reply
+    //   - `mode_mismatch` — the intent can't do what was asked (also sets unchanged)
+    //   - `actions`       — a delete confirmation (`delete_self|delete_node|delete_child`);
+    //                       these carry `unchanged:false` + a destructive `notice`, so the
+    //                       plain `unchanged` check misses them (this was the bug).
+    // A real edit can still carry a `notice` (e.g. a truncation "may be incomplete"
+    // advisory) — that case has NO actions and unchanged:false, so it correctly falls
+    // through to the edit path below, where the notice is surfaced after the diagram.
+    let has_actions = result["actions"].as_array().map(|a| !a.is_empty()).unwrap_or(false);
+
+    if unchanged || answer.is_some() || mismatch.is_some() || has_actions {
         if json {
             let mut out = serde_json::json!({
                 "diagram_id": id,
                 "mermaid":    mermaid,
                 "drills":     [],
-                "unchanged":  true,
+                "unchanged":  unchanged,
             });
             if let Some(a) = answer   { out["answer"] = serde_json::Value::String(a.to_string()); }
             if let Some(n) = notice   { out["notice"] = serde_json::Value::String(n.to_string()); }
@@ -457,14 +469,14 @@ async fn generate(
             if let Some(m) = result.get("mode_mismatch") {
                 if !m.is_null() { out["mode_mismatch"] = m.clone(); }
             }
+            if has_actions { out["actions"] = result["actions"].clone(); }
             println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
             return;
         }
 
         match answer.or(mismatch).or(notice) {
             Some(text) => {
-                println!("\n{} The diagram was not changed — the server answered instead:\n",
-                    "ℹ".cyan().bold());
+                println!("\n{} The diagram was not changed:\n", "ℹ".cyan().bold());
                 for line in text.lines() {
                     println!("  {}", line);
                 }
@@ -526,6 +538,8 @@ async fn generate(
             "drills":     created_drills
         });
         if let Some(s) = chat_session_id { out["chat_session_id"] = serde_json::Value::String(s.to_string()); }
+        // A real edit can still ship an advisory notice (e.g. truncation). Keep it.
+        if let Some(n) = notice { out["notice"] = serde_json::Value::String(n.to_string()); }
         println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
         return;
     }
@@ -547,6 +561,11 @@ async fn generate(
             let cid  = d["diagram_id"].as_str().unwrap_or("").dimmed();
             println!("    {} → {}", node, cid);
         }
+    }
+
+    // The edit went through but the server flagged something (usually truncation).
+    if let Some(n) = notice {
+        println!("\n{} {}", "⚠".yellow(), n);
     }
 }
 
