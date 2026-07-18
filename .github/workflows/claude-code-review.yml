@@ -1,0 +1,133 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches: [main]
+    paths:
+      - "src/**/*.rs"
+      - "skills/**/*.md"
+      - "npm/**"
+      - "Cargo.toml"
+      - "CLAUDE.md"
+
+jobs:
+  claude-review:
+    if: github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          show_full_output: true
+          prompt: |
+            Review this pull request against **vaxis-cli standards**.
+
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            **What this is**: `vaxis-cli` is the Rust command-line client for **Vaxis**, a hosted diagram/architecture SaaS (Cloudflare Workers API + D1, default host `https://app.vaxis.dev`). The CLI is a thin, auth-aware HTTP client — it renders nothing and runs no AI locally. It is meant to be **driven by an AI assistant (Claude)**: Claude supplies Mermaid, Vaxis persists it, auto-expands "drill" subsystems into a diagram tree, and returns a share link.
+            **Stack**: Rust 2021, `clap` (derive), `tokio`, `reqwest` (rustls), `serde`/`serde_json`, `toml`, `dialoguer`, `colored`. Flat command pattern — `main.rs` matches the `Commands` enum and dispatches to one `run()` per module under `src/commands/`. There is NO test suite.
+
+            **Review Checklist**:
+
+            1. **🔴 Backend API contract (the cross-repo STRONG RULE — highest priority)**
+               - This CLI is a HARD-CODED HTTP client of the `vaxis` backend (`apps/api`, separate repo https://github.com/Unwita-Insights/vaxis). Every URL and JSON field name is a literal string in the Rust source — there is NO shared schema, so a change on either side breaks the other silently.
+               - If this PR **starts consuming a NEW backend endpoint, stops using one, or changes a consumed URL / method / request field / response field it reads**, then BOTH of these MUST be updated in the same change — flag as **MAJOR** if either is missing:
+                 - the "Backend API surface the CLI depends on (the contract)" list in this repo's `CLAUDE.md`, AND
+                 - the mirror list in the `vaxis` repo's `CLAUDE.md` (API routes section) — https://github.com/Unwita-Insights/vaxis
+               - Post this reminder verbatim when the contract is touched, naming the exact endpoint/field: *"⚠️ Backend API contract affected — update the contract list in BOTH `vaxis-cli/CLAUDE.md` and `vaxis/CLAUDE.md` (https://github.com/Unwita-Insights/vaxis) in the same change, or open an issue in the vaxis repo. Treat this PR as incomplete until both sides agree."*
+               - Watch for retired routes the CLI must NEVER call: `POST /api/applications/{id}/share` is retired server-side (hard `410 APP_SHARE_DISABLED`). App-wide share is read/revoke ONLY (`GET|DELETE`). Sharing is per-diagram now (`GET|POST|DELETE /api/diagrams/{id}/share`, `POST` create-OR-rotate).
+
+            2. **`skills/SKILL.md` sync**
+               - `skills/SKILL.md` is the behavioral contract that tells the AI assistant HOW to invoke the CLI (exact command invocations + JSON output schemas). If this PR changes a command's flags, output shape, or workflow, `SKILL.md` MUST be updated in the same PR. Missing update → **MAJOR**.
+
+            3. **`--json` global flag**
+               - `--json` is a global flag threaded as a `bool` into every command; the assistant always uses `--json`. Any NEW command MUST honor `--json` with a machine-readable output mode. Interactive `dialoguer` prompts (Select/Input/Confirm) MUST be guarded so they never fire in `--json`/scripting mode.
+
+            4. **Error & auth conventions (repo-wide, intentional)**
+               - Errors PRINT and EXIT — they don't propagate: `eprintln!("{} …", "✗".red()); std::process::exit(1);`. In `--json` mode, print a machine-readable error object instead (e.g. `{"error":"not_authenticated"}`).
+               - Status handling is uniform: `401` → "Session expired", `404` → "not found", `200`/`201` → success, other → "Unexpected status".
+               - Auth token comes from `config::load().user.map(|u| u.token)`; commands guard at the top of `run()` and emit `{"error":"not_authenticated"}` (JSON) or a login hint (human) before exiting.
+               - **No shared HTTP/error abstraction — intentional.** Each command inlines its own `reqwest::Client::new()`, builds its URL from `config::base_url()`, attaches `Authorization: Bearer <token>`, and hand-matches status codes. A NEW command should COPY the existing shape, not invent an abstraction (unless deliberately refactoring all of them). Do not flag the duplication as a defect.
+
+            5. **Domain behaviors that must be preserved**
+               - **Two-mode `generate`**: `--prompt` (server AI) vs `--mermaid` (Claude supplies Mermaid, server stores + processes drills); they `conflicts_with`. The `--mermaid` path is the primary flow and never routes to Ask.
+               - **`generate` is not always an edit**: the server can return `{unchanged:true, answer, …}` (Ask / notice / mode_mismatch). `generate` MUST check `unchanged`/`answer` before reporting success — printing "Generated" over echoed-back Mermaid claims an edit that never happened and discards the answer.
+               - **Drill auto-expansion**: after `generate`, the CLI iterates `drills[]` and does `POST /api/diagrams/{id}/children` per node. Don't break this loop.
+               - **Per-diagram sharing**: share the ROOT diagram (it unlocks the drill subtree). `diagrams share` GETs first, only POSTs when unshared (POST rotates).
+               - **`show` enrichment**: second `GET …/chat` call surfaces the last assistant message as synthetic `current_mermaid`, and strips `scene_json` from JSON output. Preserve both — the assistant depends on `current_mermaid`.
+               - **`format`** makes NO network call (hardcoded Mermaid reference).
+
+            6. **Versioning**
+               - `Cargo.toml` and `npm/package.json` versions are kept in LOCKSTEP — a bump in one needs the other.
+               - `src/cli.rs` has a hardcoded `#[command(version = "…")]` that is stale; if this PR touches versioning, update it too.
+
+            7. **Rust quality & safety**
+               - No `.unwrap()`/`.expect()` on network responses or user/config input that can realistically fail — handle and exit per the convention above. `config::load()` must never panic (malformed/missing → default).
+               - No secrets or tokens committed. No token echoed in logs/errors.
+               - Prefer `?`-free explicit status handling only where the repo already does; keep new code consistent with neighbours.
+               - No comments explaining WHAT (names do that) — only WHY (hidden constraints, workarounds).
+
+            **Output Format**:
+
+            ### 🔴 CRITICAL (Must Fix Before Merge)
+            Broken auth guard, token leak, a consumed endpoint changed with no contract update, calling a retired route.
+
+            ### 🟠 MAJOR (Should Fix Before Merge)
+            Contract/`SKILL.md` out of sync, `--json` not honored, `generate` not checking `unchanged`, drill loop broken, version lockstep broken.
+
+            ### 🟡 MINOR (Consider Fixing)
+            Inconsistent error/output style, unguarded interactive prompt, stale hardcoded version.
+
+            ### 💡 SUGGESTIONS
+            Improvements or best practices.
+
+            ### ✅ POSITIVE HIGHLIGHTS
+            Good patterns followed.
+
+            ### 🎯 FINAL RECOMMENDATION
+            - **Status**: APPROVE / REQUEST CHANGES / NEEDS DISCUSSION
+            - **Reasoning**: Brief explanation
+            - **Next Steps**: What to do before merging
+
+            **Instructions**:
+            1. Use `gh pr diff ${{ github.event.pull_request.number }}` to read the PR changes
+            2. Analyze against the checklist above
+            3. Reference file paths and line numbers
+            4. Provide code examples for violations and fixes
+            5. Use `gh pr comment ${{ github.event.pull_request.number }}` to post your review
+            6. Be constructive and specific
+
+          claude_args: |
+            --model anthropic/claude-opus-4.5
+            --allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"
+        env:
+          ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
+          ANTHROPIC_MODEL: anthropic/claude-opus-4.5
+
+      - name: Display Review Results
+        if: always()
+        run: |
+          echo "Claude Code Review completed"
+          if [ -n "${{ steps.claude-review.outputs.review_output }}" ]; then
+            cat "${{ steps.claude-review.outputs.review_output }}"
+          else
+            echo "No output captured"
+          fi
