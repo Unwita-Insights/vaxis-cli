@@ -12,8 +12,10 @@ pub fn run(action: ConfigAction) {
         }
         ConfigAction::Show => {
             let cfg = config::load();
-            let url = cfg.auth_url.as_deref().unwrap_or("https://vaxis.dev (default)");
-            println!("auth_url = {}", url.cyan());
+            match cfg.auth_url.as_deref() {
+                Some(url) => println!("auth_url = {}", url.cyan()),
+                None => println!("auth_url = {} {}", config::DEFAULT_AUTH_URL.cyan(), "(default)".dimmed()),
+            }
         }
     }
 }

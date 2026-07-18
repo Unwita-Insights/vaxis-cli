@@ -1,6 +1,6 @@
 use colored::Colorize;
 use dialoguer::{Select, Confirm, theme::ColorfulTheme};
-use crate::cli::DiagramsAction;
+use crate::cli::{DiagramsAction, SessionsAction};
 use crate::config;
 
 fn auth_token() -> Option<String> {
@@ -8,6 +8,13 @@ fn auth_token() -> Option<String> {
 }
 
 pub async fn run(action: DiagramsAction, json: bool) {
+    // `format` is a static reference — no auth or network needed. Handle it
+    // before the auth gate so a syntax lookup works even when logged out.
+    if matches!(action, DiagramsAction::Format) {
+        format_cmd(json);
+        return;
+    }
+
     let token = match auth_token() {
         Some(t) => t,
         None => {
@@ -23,7 +30,7 @@ pub async fn run(action: DiagramsAction, json: bool) {
     match action {
         DiagramsAction::List { app_id }           => list(&token, &app_id, json).await,
         DiagramsAction::Create { app_id, name }   => create(&token, &app_id, &name, json).await,
-        DiagramsAction::Generate { id, prompt, mermaid } => {
+        DiagramsAction::Generate { id, prompt, mermaid, intent, session } => {
             if prompt.is_none() && mermaid.is_none() {
                 if json {
                     println!("{}", serde_json::json!({"error": "provide --prompt or --mermaid"}));
@@ -32,8 +39,15 @@ pub async fn run(action: DiagramsAction, json: bool) {
                 }
                 std::process::exit(1);
             }
-            generate(&token, &id, prompt.as_deref(), mermaid.as_deref(), json).await
+            generate(&token, &id, prompt.as_deref(), mermaid.as_deref(), intent.as_deref(), session.as_deref(), json).await
         }
+        DiagramsAction::Ask { id, prompt, session } => ask(&token, &id, &prompt, session.as_deref(), json).await,
+        DiagramsAction::Sessions { action }       => match action {
+            SessionsAction::List { id }                       => sessions_list(&token, &id, json).await,
+            SessionsAction::Create { id, title }              => sessions_create(&token, &id, title.as_deref(), json).await,
+            SessionsAction::Rename { id, session_id, title }  => sessions_rename(&token, &id, &session_id, &title, json).await,
+        },
+        DiagramsAction::Share { id, rotate, revoke } => share(&token, &id, rotate, revoke, json).await,
         DiagramsAction::Show { id }               => show(&token, &id, json).await,
         DiagramsAction::Tree { id }               => tree_cmd(&token, &id, json).await,
         DiagramsAction::Undo { id }               => undo(&token, &id, json).await,
@@ -43,7 +57,6 @@ pub async fn run(action: DiagramsAction, json: bool) {
             delete(&token, &resolved, force, json).await;
         }
         DiagramsAction::Format                 => format_cmd(json),
-        DiagramsAction::Patch { id, diff }     => patch(&token, &id, &diff, json).await,
         DiagramsAction::Import { id, mermaid } => import_cmd(&token, &id, &mermaid, json).await,
     }
 }
@@ -119,6 +132,8 @@ async fn fetch_apps(token: &str) -> Vec<serde_json::Value> {
 
 async fn fetch_diagrams(token: &str, app_id: &str) -> Vec<serde_json::Value> {
     let client = reqwest::Client::new();
+    // Diagrams are listed under the application (root diagrams only). The old
+    // `GET /api/diagrams?applicationId=` route was removed in the backend refactor.
     let resp = match client
         .get(format!("{}/api/applications/{}/diagrams", crate::config::base_url(), app_id))
         .header("Authorization", format!("Bearer {}", token))
@@ -128,11 +143,24 @@ async fn fetch_diagrams(token: &str, app_id: &str) -> Vec<serde_json::Value> {
         Ok(r) => r,
         Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
     };
-    if resp.status() == 401 {
-        eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow());
-        std::process::exit(1);
+    match resp.status().as_u16() {
+        401 => {
+            eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow());
+            std::process::exit(1);
+        }
+        404 => { eprintln!("{} Application not found.", "✗".red()); std::process::exit(1); }
+        200 => {}
+        s => { eprintln!("{} Could not list diagrams (HTTP {}).", "✗".red(), s); std::process::exit(1); }
     }
-    resp.json().await.unwrap_or_default()
+    // Report a non-array body instead of silently collapsing it to an empty list
+    // (previously `unwrap_or_default()` hid moved endpoints / error objects).
+    match resp.json::<serde_json::Value>().await {
+        Ok(serde_json::Value::Array(arr)) => arr,
+        _ => {
+            eprintln!("{} Unexpected response from server (expected a diagram list).", "✗".red());
+            std::process::exit(1);
+        }
+    }
 }
 
 async fn list(token: &str, app_id: &str, json: bool) {
@@ -217,8 +245,10 @@ async fn show(token: &str, id: &str, json: bool) {
 
     let mut diagram: serde_json::Value = resp.json().await.unwrap_or_default();
 
-    // Use current_mermaid returned by the diagram endpoint — it holds the
-    // latest assistant mermaid for this specific diagram's chat thread.
+    // The diagram response now carries `current_mermaid` directly. We no longer
+    // make a second `/chat` call: it was an extra round-trip, and taking the last
+    // assistant message wrongly surfaced Ask-mode prose answers as if they were
+    // the diagram's Mermaid.
     let current_mermaid = diagram["current_mermaid"].as_str().map(|s| s.to_string());
 
     if json {
@@ -322,14 +352,33 @@ fn print_tree(node: &serde_json::Value, prefix: &str, is_last: bool) {
     }
 }
 
-async fn generate(token: &str, id: &str, prompt: Option<&str>, mermaid: Option<&str>, json: bool) {
-    let body = if let Some(m) = mermaid {
+async fn generate(
+    token: &str,
+    id: &str,
+    prompt: Option<&str>,
+    mermaid: Option<&str>,
+    intent: Option<&str>,
+    session: Option<&str>,
+    json: bool,
+) {
+    let mut body = if let Some(m) = mermaid {
+        // Direct-Mermaid path: the server stores the Mermaid without invoking the
+        // AI, so `intent` is meaningless here and is ignored (clap also forbids
+        // pairing --intent with --mermaid).
         if !json { println!("{}", "Saving diagram...".dimmed()); }
         serde_json::json!({ "mermaid": m })
     } else {
         if !json { println!("{}", "Generating...".dimmed()); }
-        serde_json::json!({ "prompt": prompt.unwrap_or("") })
+        let mut b = serde_json::json!({ "prompt": prompt.unwrap_or("") });
+        if let Some(i) = intent {
+            b["intent"] = serde_json::Value::String(i.to_string());
+        }
+        b
     };
+    // A chat session can be targeted on either path.
+    if let Some(s) = session {
+        body["chat_session_id"] = serde_json::Value::String(s.to_string());
+    }
 
     let client = reqwest::Client::new();
     let resp = match client
@@ -350,6 +399,19 @@ async fn generate(token: &str, id: &str, prompt: Option<&str>, mermaid: Option<&
         401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
         404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
         200 | 201 => {}
+        429 => {
+            // AI quota / rate limit (AiQuotaException) — surface the server's
+            // friendly message instead of a generic "unexpected status".
+            let msg = result["error"]["message"].as_str()
+                .or_else(|| result["error"].as_str())
+                .unwrap_or("You're generating too fast — wait a minute and try again.");
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+            } else {
+                eprintln!("{} Rate limited: {}", "⚠".yellow(), msg);
+            }
+            std::process::exit(1);
+        }
         _ => {
             let msg = result["error"]["message"].as_str()
                 .or_else(|| result["error"].as_str())
@@ -366,16 +428,76 @@ async fn generate(token: &str, id: &str, prompt: Option<&str>, mermaid: Option<&
     let mermaid = result["mermaid"].as_str().unwrap_or("").to_string();
     let drills  = result["drills"].as_array().cloned().unwrap_or_default();
 
+    // A generate turn does not always edit the diagram. The server routes to Ask
+    // whenever intent is "ask" OR intent is "auto" (the default) and the prompt
+    // reads as a question — and it answers in prose with `unchanged: true`, an
+    // `answer`, and the CURRENT mermaid echoed back. `notice` (no-op/refusal) and
+    // `mode_mismatch` (the intent can't do what was asked) are the other no-edit
+    // turns. Treating any of these as a successful edit would report "Generated"
+    // over unchanged Mermaid and throw the answer away, so they return early.
+    let unchanged = result["unchanged"].as_bool().unwrap_or(false);
+    let answer    = result["answer"].as_str();
+    let notice    = result["notice"].as_str();
+    let mismatch  = result["mode_mismatch"]["message"].as_str();
+    // The server assigns/echoes the chat session this turn ran in. Surface it so
+    // a caller can target the same session later with `--session`.
+    let chat_session_id = result["chat_session_id"].as_str();
+
+    if unchanged || answer.is_some() {
+        if json {
+            let mut out = serde_json::json!({
+                "diagram_id": id,
+                "mermaid":    mermaid,
+                "drills":     [],
+                "unchanged":  true,
+            });
+            if let Some(a) = answer   { out["answer"] = serde_json::Value::String(a.to_string()); }
+            if let Some(n) = notice   { out["notice"] = serde_json::Value::String(n.to_string()); }
+            if let Some(s) = chat_session_id { out["chat_session_id"] = serde_json::Value::String(s.to_string()); }
+            if let Some(m) = result.get("mode_mismatch") {
+                if !m.is_null() { out["mode_mismatch"] = m.clone(); }
+            }
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+            return;
+        }
+
+        match answer.or(mismatch).or(notice) {
+            Some(text) => {
+                println!("\n{} The diagram was not changed — the server answered instead:\n",
+                    "ℹ".cyan().bold());
+                for line in text.lines() {
+                    println!("  {}", line);
+                }
+                if answer.is_some() {
+                    println!("\n{}", "Use `vaxis diagrams ask` for questions, or an explicit \
+                                      --intent edit|replace|drill to change the diagram.".dimmed());
+                }
+            }
+            None => println!("{} No change was made to the diagram.", "ℹ".cyan().bold()),
+        }
+        return;
+    }
+
     // Create child diagrams for every drill block the AI returned
     let mut created_drills: Vec<serde_json::Value> = Vec::new();
     for drill in &drills {
         let node_id = drill["node_id"].as_str().unwrap_or("");
         if node_id.is_empty() { continue; }
 
+        // Seed the child with the drill's Mermaid when the generate response
+        // included one, so a drilled-in diagram opens pre-populated instead of
+        // empty. The field is ignored by backends that don't support it.
+        let mut child_body = serde_json::json!({ "node_id": node_id, "node_label": node_id });
+        if let Some(seed) = drill["mermaid"].as_str() {
+            if !seed.is_empty() {
+                child_body["seed_mermaid"] = serde_json::Value::String(seed.to_string());
+            }
+        }
+
         if let Ok(cr) = client
             .post(format!("{}/api/diagrams/{}/children", crate::config::base_url(), id))
             .header("Authorization", format!("Bearer {}", token))
-            .json(&serde_json::json!({ "node_id": node_id, "node_label": node_id }))
+            .json(&child_body)
             .send()
             .await
         {
@@ -398,11 +520,13 @@ async fn generate(token: &str, id: &str, prompt: Option<&str>, mermaid: Option<&
     }
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+        let mut out = serde_json::json!({
             "diagram_id": id,
             "mermaid":    mermaid,
             "drills":     created_drills
-        })).unwrap_or_default());
+        });
+        if let Some(s) = chat_session_id { out["chat_session_id"] = serde_json::Value::String(s.to_string()); }
+        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
         return;
     }
 
@@ -423,6 +547,332 @@ async fn generate(token: &str, id: &str, prompt: Option<&str>, mermaid: Option<&
             let cid  = d["diagram_id"].as_str().unwrap_or("").dimmed();
             println!("    {} → {}", node, cid);
         }
+    }
+}
+
+// Sharing is per-diagram: one link unlocks this diagram plus the sub-diagrams it
+// drills into. `POST /share` always mints a fresh token pair (it is create-OR-ROTATE,
+// not get-or-create), so a plain `share` reads the existing link first and only
+// POSTs when there is none — otherwise repeat calls would silently invalidate a
+// link that is already handed out. `--rotate` asks for that new token explicitly.
+async fn share(token: &str, id: &str, rotate: bool, revoke: bool, json: bool) {
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/diagrams/{}/share", crate::config::base_url(), id);
+
+    if revoke {
+        let resp = match client
+            .delete(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        };
+        match resp.status().as_u16() {
+            401 => { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); std::process::exit(1); }
+            404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+            200 => {
+                if json {
+                    println!("{}", serde_json::json!({"ok": true, "diagram_id": id, "shared": false}));
+                } else {
+                    println!("{} Sharing disabled for {}", "✓".green().bold(), id.dimmed());
+                }
+            }
+            s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+        }
+        return;
+    }
+
+    // Always read current state first. A plain `share` returns the existing link
+    // (never rotating it), and reading first is also what lets `--rotate` tell
+    // whether it actually replaced a live link or just minted the first one — so
+    // the "previous link no longer works" warning is only shown when it's true.
+    let get_resp = match client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+    };
+    let had_link = match get_resp.status().as_u16() {
+        401 => { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); std::process::exit(1); }
+        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        200 => {
+            let body: serde_json::Value = get_resp.json().await.unwrap_or_default();
+            match share_token(&body, "token") {
+                Some(tok) => {
+                    if !rotate {
+                        print_share_links(id, &tok, share_token(&body, "edit_token").as_deref(), false, json);
+                        return;
+                    }
+                    true // a live link exists and the caller asked to rotate it
+                }
+                None => false, // not shared yet — the POST below mints the first link
+            }
+        }
+        s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+    };
+
+    let resp = match client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+    };
+
+    match resp.status().as_u16() {
+        401 => { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); std::process::exit(1); }
+        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        200 | 201 => {
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            let tok = match share_token(&body, "token") {
+                Some(t) => t,
+                None => { eprintln!("{} Server returned no share token.", "✗".red()); std::process::exit(1); }
+            };
+            print_share_links(id, &tok, share_token(&body, "edit_token").as_deref(), had_link, json);
+        }
+        s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+    }
+}
+
+// The share endpoints return `null` for an unshared diagram, and some payloads
+// carry the string "null" — treat both, and the empty string, as "no token".
+fn share_token(body: &serde_json::Value, field: &str) -> Option<String> {
+    match body[field].as_str() {
+        Some(t) if !t.is_empty() && t != "null" => Some(t.to_string()),
+        _ => None,
+    }
+}
+
+// The backend returns tokens only; the CLI builds the URLs, matching the web
+// share dialog: /view/<token> is read-only, /collab/<edit_token> can edit.
+fn print_share_links(id: &str, token: &str, edit_token: Option<&str>, replaced: bool, json: bool) {
+    let base = crate::config::base_url();
+    let view_url = format!("{}/view/{}", base, token);
+    let edit_url = edit_token.map(|t| format!("{}/collab/{}", base, t));
+
+    if json {
+        let mut out = serde_json::json!({
+            "diagram_id": id,
+            "shared": true,
+            "url": view_url,
+            "token": token,
+        });
+        if let (Some(t), Some(u)) = (edit_token, edit_url.as_ref()) {
+            out["edit_token"] = serde_json::Value::String(t.to_string());
+            out["edit_url"]   = serde_json::Value::String(u.clone());
+        }
+        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        return;
+    }
+
+    if replaced {
+        println!("{} New link minted — the previous one no longer works.", "⚠".yellow());
+    }
+    println!("{} View link: {}", "✓".green().bold(), view_url.cyan());
+    if let Some(u) = edit_url {
+        println!("{} Edit link: {}", "✓".green().bold(), u.cyan());
+    }
+}
+
+async fn ask(token: &str, id: &str, prompt: &str, session: Option<&str>, json: bool) {
+    // Ask mode is the generate endpoint with intent "ask": the server answers in
+    // prose and makes no edit to the diagram (`unchanged: true`, `answer: "..."`).
+    let mut body = serde_json::json!({ "prompt": prompt, "intent": "ask" });
+    if let Some(s) = session {
+        body["chat_session_id"] = serde_json::Value::String(s.to_string());
+    }
+    if !json { println!("{}", "Asking...".dimmed()); }
+
+    let client = reqwest::Client::new();
+    let resp = match client
+        .post(format!("{}/api/diagrams/{}/generate", crate::config::base_url(), id))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+    };
+
+    let status = resp.status().as_u16();
+    let result: serde_json::Value = resp.json().await.unwrap_or_default();
+
+    match status {
+        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
+        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        200 | 201 => {}
+        429 => {
+            let msg = result["error"]["message"].as_str()
+                .or_else(|| result["error"].as_str())
+                .unwrap_or("You're generating too fast — wait a minute and try again.");
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+            } else {
+                eprintln!("{} Rate limited: {}", "⚠".yellow(), msg);
+            }
+            std::process::exit(1);
+        }
+        _ => {
+            let msg = result["error"]["message"].as_str()
+                .or_else(|| result["error"].as_str())
+                .unwrap_or("unexpected server error");
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+            } else {
+                eprintln!("{} Ask failed (HTTP {}): {}", "✗".red(), status, msg);
+            }
+            std::process::exit(1);
+        }
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+        return;
+    }
+
+    // `answer` is the prose reply; some no-op turns use `notice` instead. Ask
+    // forces intent "ask", so the server should always answer in prose — if it
+    // returned neither, say so plainly rather than printing a bare placeholder.
+    match result["answer"].as_str().or_else(|| result["notice"].as_str()) {
+        Some(text) => {
+            println!();
+            for line in text.lines() {
+                println!("  {}", line);
+            }
+        }
+        None => {
+            eprintln!("{} The server returned no answer for this question.", "⚠".yellow());
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn sessions_list(token: &str, id: &str, json: bool) {
+    let client = reqwest::Client::new();
+    let resp = match client
+        .get(format!("{}/api/diagrams/{}/chat/sessions", crate::config::base_url(), id))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+    };
+
+    match resp.status().as_u16() {
+        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
+        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        200 => {}
+        s => { eprintln!("{} Could not list sessions (HTTP {}).", "✗".red(), s); std::process::exit(1); }
+    }
+
+    let data: serde_json::Value = resp.json().await.unwrap_or_default();
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&data).unwrap_or_default());
+        return;
+    }
+
+    let active = data["active_chat_session_id"].as_str().unwrap_or("");
+    let sessions = data["sessions"].as_array().cloned().unwrap_or_default();
+    if sessions.is_empty() {
+        println!("{}", "No chat sessions yet. Start one with: vaxis diagrams sessions create <id>".dimmed());
+        return;
+    }
+
+    println!("{}", "─".repeat(56).dimmed());
+    for s in &sessions {
+        let sid   = s["id"].as_str().unwrap_or("");
+        let title = s["title"].as_str().unwrap_or("Untitled");
+        let count = s["message_count"].as_u64().unwrap_or(0);
+        let marker = if sid == active { "●".green().to_string() } else { " ".to_string() };
+        println!("  {} {}  {} {}",
+            marker,
+            title.bold(),
+            sid.dimmed(),
+            format!("({} msg{})", count, if count == 1 { "" } else { "s" }).dimmed());
+    }
+    println!("{}", "─".repeat(56).dimmed());
+    println!("  {} session{}  {}",
+        sessions.len().to_string().cyan(),
+        if sessions.len() == 1 { "" } else { "s" },
+        "(● = active)".dimmed());
+}
+
+async fn sessions_create(token: &str, id: &str, title: Option<&str>, json: bool) {
+    let mut body = serde_json::Map::new();
+    if let Some(t) = title {
+        body.insert("title".into(), t.into());
+    }
+
+    let client = reqwest::Client::new();
+    let resp = match client
+        .post(format!("{}/api/diagrams/{}/chat/sessions", crate::config::base_url(), id))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+    };
+
+    match resp.status().as_u16() {
+        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
+        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        200 | 201 => {}
+        s => { eprintln!("{} Could not create session (HTTP {}).", "✗".red(), s); std::process::exit(1); }
+    }
+
+    let data: serde_json::Value = resp.json().await.unwrap_or_default();
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&data).unwrap_or_default());
+        return;
+    }
+
+    let session = &data["session"];
+    println!(
+        "{} Created chat session {} {}",
+        "✓".green().bold(),
+        session["title"].as_str().unwrap_or("Untitled").green(),
+        session["id"].as_str().unwrap_or("").dimmed()
+    );
+}
+
+async fn sessions_rename(token: &str, id: &str, session_id: &str, title: &str, json: bool) {
+    let client = reqwest::Client::new();
+    let resp = match client
+        .patch(format!("{}/api/diagrams/{}/chat/sessions/{}", crate::config::base_url(), id, session_id))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({ "title": title }))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+    };
+
+    match resp.status().as_u16() {
+        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
+        404 => { eprintln!("{} Diagram or session not found.", "✗".red()); std::process::exit(1); }
+        200 => {
+            if json {
+                let data: serde_json::Value = resp.json().await.unwrap_or_default();
+                println!("{}", serde_json::to_string_pretty(&data).unwrap_or_default());
+            } else {
+                println!("{} Session renamed to {}", "✓".green().bold(), title.green());
+            }
+        }
+        s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
     }
 }
 
@@ -522,46 +972,53 @@ async fn delete(token: &str, id: &str, force: bool, json: bool) {
 
 fn format_cmd(_json: bool) {
     let spec = serde_json::json!({
-        "supported_types": [
+        "editable_types": [
             {
                 "type": "flowchart",
-                "keyword": "graph TD / graph LR",
-                "when": "Architecture, service maps, general flows",
-                "example": "graph TD\n    A[User] --> B[API Gateway]\n    B --> C[Auth]\n    B --> D[Payment]"
-            },
-            {
-                "type": "er",
-                "keyword": "erDiagram",
-                "when": "Database schema, entity relationships",
-                "example": "erDiagram\n    USER ||--o{ ORDER : places\n    ORDER ||--|{ LINE_ITEM : contains"
+                "keyword": "flowchart TB / flowchart LR (graph TD/LR also works)",
+                "when": "Architecture, services, processes, data flow, general diagrams",
+                "drillable": true,
+                "example": "flowchart TB\n    A[User] --> B[API Gateway]\n    B --> C[Auth]\n    B --> D[Payment]"
             },
             {
                 "type": "sequence",
                 "keyword": "sequenceDiagram",
-                "when": "Request/response flows, inter-service calls",
+                "when": "Request/response, protocol, API interaction, lifecycle over time",
+                "drillable": false,
                 "example": "sequenceDiagram\n    Client->>API: POST /pay\n    API->>Stripe: charge\n    Stripe-->>API: ok\n    API-->>Client: 200"
-            },
-            {
-                "type": "state",
-                "keyword": "stateDiagram-v2",
-                "when": "Order lifecycle, auth state, resource states",
-                "example": "stateDiagram-v2\n    [*] --> Pending\n    Pending --> Processing\n    Processing --> Complete\n    Processing --> Failed"
             },
             {
                 "type": "class",
                 "keyword": "classDiagram",
-                "when": "Domain model, OOP hierarchy, type relationships",
+                "when": "Object models, domain entities, inheritance/composition",
+                "drillable": false,
                 "example": "classDiagram\n    Animal <|-- Dog\n    Animal : +name\n    Animal : +speak()"
             },
             {
-                "type": "journey",
-                "keyword": "journey",
-                "when": "User journeys, onboarding flows",
-                "example": "journey\n    title Checkout\n    section Cart\n      Add item: 5: User\n    section Pay\n      Enter card: 3: User"
+                "type": "er",
+                "keyword": "erDiagram",
+                "when": "Database entities, tables, relationships, cardinality",
+                "drillable": false,
+                "example": "erDiagram\n    USER ||--o{ ORDER : places\n    ORDER ||--|{ LINE_ITEM : contains"
+            },
+            {
+                "type": "state",
+                "keyword": "stateDiagram-v2",
+                "when": "Finite states, lifecycle, status transitions, workflow states",
+                "drillable": false,
+                "example": "stateDiagram-v2\n    [*] --> Pending\n    Pending --> Processing\n    Processing --> Complete\n    Processing --> Failed"
             }
         ],
+        "editable_types_note": "These 5 types are editable/re-generatable in Vaxis. Only flowchart supports drill blocks / child diagrams. Prefer flowchart for general architecture.",
+        "image_fallback_types": [
+            "gantt", "pie", "journey", "timeline", "mindmap", "requirementDiagram",
+            "C4", "sankey", "xychart", "block", "packet", "architecture", "kanban",
+            "radar", "treemap", "venn", "ishikawa", "info"
+        ],
+        "image_fallback_note": "Valid Mermaid, but rendered as a static image in Vaxis — NOT editable or drillable. Use only when the user explicitly asks for that family (e.g. 'make a Gantt chart', 'timeline', 'mindmap', 'C4'). Note: 'journey' is image-fallback here, not an editable type.",
         "drill_syntax": "%% vaxis:drill <nodeId>",
-        "drill_description": "Add this comment after any node to mark it as a drill target. The CLI auto-creates child diagrams for every drill block returned by generate.",
+        "drill_description": "FLOWCHART ONLY. Add this comment after a node to mark it as a drill target; the CLI auto-creates a child diagram for each drill block returned by generate. Do NOT use drill blocks with sequence/class/er/state or any image-fallback type.",
+        "preserve_type_on_edit": "When editing an existing diagram, keep its current type unless the user explicitly asks to convert it.",
         "node_id_rules": [
             "Alphanumeric and underscores only — no spaces",
             "camelCase or snake_case both fine",
@@ -571,59 +1028,18 @@ fn format_cmd(_json: bool) {
         "limits": {
             "max_nodes_per_diagram": 50,
             "max_edges_per_diagram": 60,
-            "recommendation": "Use drill blocks when a diagram exceeds 30 nodes"
+            "recommendation": "Use drill blocks when a flowchart exceeds 30 nodes"
         },
         "best_practices": [
-            "graph TD for architecture (top-down)",
-            "graph LR for pipelines and data flows (left-right)",
-            "Group related nodes in subgraphs",
-            "Label every edge — arrows with labels communicate intent",
-            "Root diagrams: broad strokes (services, domains)",
-            "Child diagrams: fine detail (functions, data models, steps)"
+            "flowchart TB for architecture (top-down)",
+            "flowchart LR for pipelines and data flows (left-right)",
+            "Group related nodes in subgraphs (keep them flat — never nest)",
+            "Label edges only when the relationship isn't obvious from node names",
+            "Cap each node at ~4 connections; avoid hub-and-spoke clutter",
+            "Root diagrams: broad strokes (services, domains); child diagrams: fine detail"
         ]
     });
     println!("{}", serde_json::to_string_pretty(&spec).unwrap_or_default());
-}
-
-async fn patch(token: &str, id: &str, diff: &str, json: bool) {
-    let diff_val: serde_json::Value = match serde_json::from_str(diff) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("{} Invalid JSON in --diff: {}", "✗".red(), e);
-            std::process::exit(1);
-        }
-    };
-
-    let client = reqwest::Client::new();
-    let resp = match client
-        .post(format!("{}/api/diagrams/{}/patch", crate::config::base_url(), id))
-        .header("Authorization", format!("Bearer {}", token))
-        .json(&diff_val)
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
-    };
-
-    match resp.status().as_u16() {
-        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
-        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
-        200 => {
-            let result: serde_json::Value = resp.json().await.unwrap_or_default();
-            if json {
-                println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
-            } else {
-                println!("{} Patch applied", "✓".green().bold());
-                if let Some(mermaid) = result["mermaid"].as_str() {
-                    for line in mermaid.lines() {
-                        println!("  {}", line);
-                    }
-                }
-            }
-        }
-        s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
-    }
 }
 
 async fn import_cmd(token: &str, id: &str, mermaid: &str, json: bool) {
