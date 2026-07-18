@@ -401,10 +401,10 @@ Use when the user pastes raw Mermaid into the chat or provides it from another t
 
 ```
 1. vaxis diagrams share <rootDiagramId> --json
-   → Returns { "url": "https://beta.vaxis.dev/view/abc123xyz", ... }
+   → Returns { "url": "https://app.vaxis.dev/view/abc123xyz", ... }
 
 2. Give the user the link directly in the chat:
-   "Here's your shareable link: https://beta.vaxis.dev/view/abc123xyz — anyone with this link can view the full architecture."
+   "Here's your shareable link: https://app.vaxis.dev/view/abc123xyz — anyone with this link can view the full architecture."
 ```
 
 ---
@@ -530,9 +530,9 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
 {
   "diagram_id": "dgm_xxx",
   "shared": true,
-  "url": "https://beta.vaxis.dev/view/abc123xyz",
+  "url": "https://app.vaxis.dev/view/abc123xyz",
   "token": "abc123xyz",
-  "edit_url": "https://beta.vaxis.dev/collab/def456uvw",
+  "edit_url": "https://app.vaxis.dev/collab/def456uvw",
   "edit_token": "def456uvw"
 }
 ```
