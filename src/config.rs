@@ -48,8 +48,17 @@ pub fn clear() {
 pub const DEFAULT_AUTH_URL: &str = "https://app.vaxis.dev";
 
 pub fn base_url() -> String {
-    std::env::var("VAXIS_AUTH_URL")
+    let url = std::env::var("VAXIS_AUTH_URL")
         .ok()
         .or_else(|| load().auth_url)
-        .unwrap_or_else(|| DEFAULT_AUTH_URL.to_string())
+        .unwrap_or_else(|| DEFAULT_AUTH_URL.to_string());
+    // Strip trailing slashes so callers can safely `format!("{}/api/…", base_url())`.
+    // A configured `https://app.vaxis.dev/` would otherwise build `…//api/…`, which
+    // the backend router 404s ("Server returned an unexpected response" on login).
+    normalize_base_url(&url)
+}
+
+/// Trim trailing slashes (and surrounding whitespace) from a base URL.
+pub fn normalize_base_url(url: &str) -> String {
+    url.trim().trim_end_matches('/').to_string()
 }
