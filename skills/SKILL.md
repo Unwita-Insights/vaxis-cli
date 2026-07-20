@@ -495,6 +495,39 @@ graph TD
 
 Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annotates. The CLI auto-creates child diagrams for every drill block after `generate` returns. **Drill blocks work on flowcharts only** — never add them to sequence / class / er / state or any image-fallback diagram.
 
+**Drilling is Vaxis's core feature — use it by default for architecture.** When you draw an architecture or system diagram, structure it as a hierarchy from the start, not a flat single-level graph:
+
+- **Top level = the major subsystems** (services, domains, bounded contexts) — the broad strokes only.
+- **Every composite subsystem gets a `%% vaxis:drill`** — any node with real internal structure worth its own diagram (a service made of components, a subsystem with steps/parts). Its internals belong in the child diagram, not crammed into the root.
+- **Atomic / leaf nodes do NOT drill** — a database, cache, message queue, or external SaaS (e.g. `PostgreSQL`, `Redis`, `Stripe API`) has nothing inside worth a child diagram. Drilling these produces empty, noisy children — don't.
+
+Worked example — "draw a payment system architecture":
+
+```
+graph TD
+    web[Web App]
+    api[API Gateway]
+    auth[Auth Service]
+    %% vaxis:drill auth
+    pay[Payment Service]
+    %% vaxis:drill pay
+    order[Order Service]
+    %% vaxis:drill order
+    db[(PostgreSQL)]
+    cache[(Redis)]
+    web --> api
+    api --> auth
+    api --> pay
+    api --> order
+    order --> db
+    pay --> db
+    api --> cache
+```
+
+The three services drill (composite); the database and cache don't (leaf). Flattening auth/pay/order's internals into the root — or drilling `db`/`cache` — is wrong.
+
+Don't over-fragment: a genuinely small diagram (a handful of nodes with no real subsystems) needs no drills — an empty `drills[]` is correct there. The rule is **"drill composites," not "drill everything."**
+
 ### Node ID rules
 
 - Alphanumeric and underscores only — **no spaces**
@@ -506,7 +539,7 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
 
 - Max 50 nodes per diagram
 - Max 60 edges per diagram
-- When a diagram exceeds 30 nodes, use drill blocks to push subsystems into child diagrams
+- 50 nodes / 60 edges is a hard ceiling — don't design up to it. Structure architecture as a drill hierarchy from the start (see **"Drilling is Vaxis's core feature"** above): keep the root readable (roughly a dozen major nodes) and push detail into drill children rather than growing one flat diagram toward the cap
 - For small changes to large diagrams, edit `current_mermaid` and resend the full diagram via `generate --mermaid`, preserving every existing node (see Workflow 14)
 
 ---
@@ -698,7 +731,7 @@ The `--mermaid` path never routes to Ask.
 | Server unreachable (connection error) | Tell the user the server may be down. Suggest running `vaxis config show` to verify the URL is correct. |
 | `generate` returns a Mermaid parse error or garbled output | Run `vaxis diagrams undo <id>` immediately, then retry `generate` with a more explicit prompt. Never call `generate` again without undoing first. |
 | 404 on a diagram or app ID | The ID may be wrong or the resource was deleted. Run `vaxis apps list --json` → `vaxis diagrams list <appId> --json` to rediscover the correct ID. |
-| `drills` array is empty after `generate` | The AI did not mark any nodes for drilling. This is fine for simple diagrams. Offer to drill manually into any node the user points to. |
+| `drills` array is empty after `generate` | Fine for a genuinely small diagram with no real subsystems. But if you just drew an **architecture** with composite subsystems and got no drills, you under-structured it (Rule 15) — add `%% vaxis:drill` to each composite node and regenerate. |
 | User gives ambiguous instruction ("update the diagram") | Run Workflow 12 — ask which diagram, ask what change, then proceed. Never guess. |
 | User refers to a subsystem by name ("the auth flow") | Check conversation context first. If diagram IDs are already known, use them. Otherwise run `vaxis diagrams tree --json` to find the correct child diagram ID. |
 
@@ -740,3 +773,5 @@ The `--mermaid` path never routes to Ask.
 13. **Confirm before destructive actions.** Before running `delete` on a diagram or application, always ask for confirmation and state what will be cascaded. After deletion, report exactly what was removed.
 
 14. **Preserve existing nodes on every update.** When updating a diagram, read `current_mermaid` first and carry forward all existing nodes. Only modify what the user asked to change. No node should disappear from an update unless the user explicitly asked to remove it.
+
+15. **Drill by default — it's the core feature.** When generating an architecture, never emit a flat single-level diagram. Structure it as a hierarchy: major subsystems at the root, a `%% vaxis:drill` on every composite subsystem, and no drills on leaf/atomic nodes (databases, caches, external services). A diagram that could have subsystems but has none is a missed use of Vaxis. See **"Drilling is Vaxis's core feature"** in the Drill syntax section for the composite-vs-leaf rule and a worked example.
