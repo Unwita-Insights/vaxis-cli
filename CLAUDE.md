@@ -141,6 +141,19 @@ Endpoints the CLI is coupled to (backend's CURRENT paths):
   `PATCH /api/diagrams/{id}/chat/sessions/{sid}` (session rename),
   `DELETE /api/diagrams/{id}/chat/messages/last` (undo).
 
+**🔴 STRONG RULE — `skills/SKILL.md`'s diagram style-rules section (shape mapping, subgraph
+coloring, fan-out cap, auto-drill threshold) is a condensed mirror of the system prompt the
+`vaxis` backend gives its own server-side AI**, so that Claude (via `diagrams generate
+--mermaid`) produces visually consistent diagrams with the server-AI path (`generate
+--prompt`). The mirrored source, in the `vaxis` repo:
+- `S_FLOWCHART_SHAPES`, `S_COLOR`, `S_DRILL` in `apps/api/src/prompts.ts`.
+- `STORAGE_KEYWORD_TOKENS` / `STORAGE_KEYWORDS_PLAIN` in `packages/scene-serializer/src/shapeRules.ts`.
+
+This is a **prose mirror, not shared code** — the CLI is Rust and cannot import a TS module, so
+some drift over time is expected, not a bug. If you're touching `vaxis`'s prompt/shape rules,
+flag it and update `skills/SKILL.md` here in the same change (or open a `vaxis-cli` issue). The
+mirror note on the `vaxis` side lives next to its own STRONG RULE for the endpoint contract.
+
 ## When you change things
 
 - Adding/altering a command → update `src/cli.rs`, the module in `src/commands/`, **and**
