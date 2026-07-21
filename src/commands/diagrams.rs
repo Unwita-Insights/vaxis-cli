@@ -7,6 +7,56 @@ fn auth_token() -> Option<String> {
     config::load().user.map(|u| u.token)
 }
 
+/// Preflight-lint Mermaid before a `--mermaid` generate. Returns `true` to
+/// proceed, `false` to abort (errors were found and already reported). Warnings
+/// are printed but never block. In `--json` mode an abort prints a machine
+/// error object to stdout; warnings go to stderr so stdout stays clean for the
+/// eventual result JSON.
+fn preflight_mermaid(mermaid: &str, json: bool) -> bool {
+    use crate::mermaid_lint::{lint, Level};
+    let report = lint(mermaid);
+    if report.issues.is_empty() {
+        return true;
+    }
+    let has_errors = report.has_errors();
+
+    if json {
+        for w in report.warnings() {
+            eprintln!("{} {}", "⚠".yellow(), w.message);
+        }
+        if has_errors {
+            let issues: Vec<serde_json::Value> = report
+                .issues
+                .iter()
+                .filter(|i| i.level == Level::Error)
+                .map(|i| serde_json::json!({ "code": i.code, "message": i.message, "line": i.line }))
+                .collect();
+            println!(
+                "{}",
+                serde_json::json!({ "error": "mermaid_lint_failed", "issues": issues })
+            );
+            return false;
+        }
+        return true;
+    }
+
+    for e in report.errors() {
+        eprintln!("{} {}", "✗".red(), e.message);
+    }
+    for w in report.warnings() {
+        eprintln!("{} {}", "⚠".yellow(), w.message);
+    }
+    if has_errors {
+        eprintln!(
+            "{} Fix the Mermaid and try again — nothing was sent. See {} for the drill rules.",
+            "→".dimmed(),
+            "vaxis diagrams format".yellow()
+        );
+        return false;
+    }
+    true
+}
+
 pub async fn run(action: DiagramsAction, json: bool) {
     // `format` is a static reference — no auth or network needed. Handle it
     // before the auth gate so a syntax lookup works even when logged out.
@@ -362,6 +412,13 @@ async fn generate(
     json: bool,
 ) {
     let mut body = if let Some(m) = mermaid {
+        // Preflight: catch drill-marker mistakes (indented markers, markers
+        // between nodes, unknown ids) deterministically before the round-trip,
+        // so the server doesn't silently drop the drills and the browser doesn't
+        // get un-renderable Mermaid. Aborts on errors; warnings are advisory.
+        if !preflight_mermaid(m, json) {
+            std::process::exit(1);
+        }
         // Direct-Mermaid path: the server stores the Mermaid without invoking the
         // AI, so `intent` is meaningless here and is ignored (clap also forbids
         // pairing --intent with --mermaid).
