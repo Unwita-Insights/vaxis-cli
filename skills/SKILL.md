@@ -30,24 +30,25 @@ If this returns `{"error": "not_authenticated"}`, stop and ask the user to run `
 ## Generation mode — check before you generate
 
 The user has a stored preference for **how** diagrams get created. Before your first
-`diagrams generate`, read it:
+`diagrams generate`, read it as JSON (Rule 6 — never parse colored text):
 
 ```bash
-vaxis config show
+vaxis config show --json
+# → { "auth_url": "https://app.vaxis.dev", "generation_mode": "mermaid" }
 ```
 
-Look at the `generation_mode` line and honor it:
+Look at the `generation_mode` field (may be `null`) and honor it:
 
-- **`generation_mode = mermaid`** (or not set / unavailable) — **you** write the Mermaid
+- **`"generation_mode": "mermaid"`** (or `null` / unavailable) — **you** write the Mermaid
   and pass it with `--mermaid`. This is the default and preferred flow: no server-AI
   call, instant, deterministic, and drills are parsed from your `%% vaxis:drill` markers.
-- **`generation_mode = prompt`** — the user wants **Vaxis's own server AI** to generate.
+- **`"generation_mode": "prompt"`** — the user wants **Vaxis's own server AI** to generate.
   Send the user's request with `--prompt` instead of writing the Mermaid yourself:
   `vaxis diagrams generate <id> --prompt "<the user's description>"`. This path supports
   `--intent` / `--session` and is subject to server-AI rate limits.
 
-Treat unset as `mermaid`. You never need to prompt the user for this — the CLI asks them
-once, on their first interactive `diagrams generate`, and remembers the answer.
+Treat `null`/unset as `mermaid`. You never need to prompt the user for this — the CLI asks
+them once, on their first interactive `diagrams generate`, and remembers the answer.
 
 ---
 
@@ -848,7 +849,7 @@ Full response includes all 5 editable types (flowchart, sequence, class, er, sta
 
 15. **Drill by default — it's the core feature.** When generating an architecture, never emit a flat single-level diagram. Structure it as a hierarchy: major subsystems at the root, a `%% vaxis:drill` on every composite subsystem, and no drills on leaf/atomic nodes (databases, caches, external services). A diagram that could have subsystems but has none is a missed use of Vaxis. See **"Drilling is Vaxis's core feature"** in the Drill syntax section for the composite-vs-leaf rule and a worked example.
 
-16. **Honor the user's generation mode.** Before generating, check `vaxis config show`. If `generation_mode = prompt`, generate via `--prompt` (Vaxis server AI). If it is `mermaid`, unset, or unavailable, write the Mermaid yourself and use `--mermaid` (the default). See **"Generation mode"** near the top of this skill. Never switch modes on your own — the flag you pass must match the stored preference.
+16. **Honor the user's generation mode.** Before generating, read `vaxis config show --json` and check the `generation_mode` field. If it is `"prompt"`, generate via `--prompt` (Vaxis server AI). If it is `"mermaid"`, `null`, or unavailable, write the Mermaid yourself and use `--mermaid` (the default). See **"Generation mode"** near the top of this skill. Never switch modes on your own — the flag you pass must match the stored preference.
 
 17. **Clarify before drawing from a thin description — ask with options, not free text.** When a diagram request lacks the detail needed for an accurate result (e.g. "draw my app" with no components, stack, or data flow named), gather what's missing **before** generating:
     - Ask a focused batch of clarifying questions (2–4) covering the key unknowns: the main components/services, what connects to what, datastores, and external services (Stripe, S3, auth provider…).
