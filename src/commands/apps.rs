@@ -31,7 +31,7 @@ pub async fn run(action: AppsAction, json: bool) {
             let resolved = resolve_id(&token, id, "Select application to delete:").await;
             delete(&token, &resolved, force, json).await;
         }
-        AppsAction::Share { id } => share(&token, &id, json).await,
+        AppsAction::Share { id, revoke } => share(&token, &id, revoke, json).await,
     }
 }
 
@@ -247,10 +247,42 @@ async fn update(token: &str, id: &str, name: Option<&str>, description: Option<&
     }
 }
 
-async fn share(token: &str, id: &str, json: bool) {
+// App-wide sharing is retired server-side: creating/rotating an app token is a
+// hard 410, because one app link exposes every diagram in the app. Sharing is
+// per-diagram now (`vaxis diagrams share`). Reads and revocation stay open so a
+// legacy link minted before the cutover can still be found and turned off —
+// that, and nothing else, is what this command does.
+async fn share(token: &str, id: &str, revoke: bool, json: bool) {
     let client = reqwest::Client::new();
+    let url = format!("{}/api/applications/{}/share", crate::config::base_url(), id);
+
+    if revoke {
+        let resp = match client
+            .delete(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        };
+        match resp.status().as_u16() {
+            401 => { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); std::process::exit(1); }
+            404 => { eprintln!("{} Application not found.", "✗".red()); std::process::exit(1); }
+            200 => {
+                if json {
+                    println!("{}", serde_json::json!({"ok": true, "id": id, "shared": false}));
+                } else {
+                    println!("{} Legacy app-wide link disabled for {}", "✓".green().bold(), id.dimmed());
+                }
+            }
+            s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+        }
+        return;
+    }
+
     let resp = match client
-        .post(format!("{}/api/applications/{}/share", crate::config::base_url(), id))
+        .get(&url)
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -260,22 +292,47 @@ async fn share(token: &str, id: &str, json: bool) {
     };
 
     match resp.status().as_u16() {
-        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
+        401 => { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); std::process::exit(1); }
         404 => { eprintln!("{} Application not found.", "✗".red()); std::process::exit(1); }
         200 => {
-            let mut body: serde_json::Value = resp.json().await.unwrap_or_default();
-            if body["url"].is_null() || body["url"].as_str().unwrap_or("").is_empty() {
-                if let Some(tok) = body["token"].as_str() {
-                    let constructed = format!("{}/view/{}", crate::config::base_url(), tok);
-                    body["url"] = serde_json::Value::String(constructed);
-                }
-            }
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            let legacy = body["token"].as_str().filter(|t| !t.is_empty() && *t != "null");
+
             if json {
-                println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
-            } else {
-                let url = body["url"].as_str().unwrap_or("(no url returned)");
-                println!("{} Shareable link: {}", "✓".green().bold(), url.cyan());
+                let mut out = serde_json::json!({
+                    "id": id,
+                    "app_share_retired": true,
+                    "use_instead": "vaxis diagrams share <diagramId>",
+                    "legacy_shared": legacy.is_some(),
+                });
+                if let Some(tok) = legacy {
+                    let base = crate::config::base_url();
+                    out["legacy_url"]   = serde_json::Value::String(format!("{}/view/{}", base, tok));
+                    out["legacy_token"] = serde_json::Value::String(tok.to_string());
+                    if let Some(etok) = body["edit_token"].as_str().filter(|t| !t.is_empty() && *t != "null") {
+                        out["legacy_edit_url"]   = serde_json::Value::String(format!("{}/collab/{}", base, etok));
+                        out["legacy_edit_token"] = serde_json::Value::String(etok.to_string());
+                    }
+                }
+                println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+                return;
             }
+
+            match legacy {
+                Some(tok) => {
+                    let base = crate::config::base_url();
+                    println!("{} This app still has a legacy app-wide link — it exposes {} in the app.",
+                        "⚠".yellow(), "every diagram".yellow());
+                    println!("  View link: {}", format!("{}/view/{}", base, tok).cyan());
+                    if let Some(etok) = body["edit_token"].as_str().filter(|t| !t.is_empty() && *t != "null") {
+                        println!("  Edit link: {}", format!("{}/collab/{}", base, etok).cyan());
+                    }
+                    println!("\n  Turn it off with: {}", format!("vaxis apps share {} --revoke", id).yellow());
+                }
+                None => println!("{}", "No legacy app-wide link on this application.".dimmed()),
+            }
+            println!("  App-wide sharing is retired. Share one diagram with: {}",
+                "vaxis diagrams share <diagramId>".yellow());
         }
         s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
     }

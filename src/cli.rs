@@ -1,9 +1,9 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(name = "vaxis")]
 #[command(about = "Vaxis CLI — your AI-powered developer tool")]
-#[command(version = "0.1.0")]
+#[command(version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -11,6 +11,34 @@ pub struct Cli {
     /// Output raw JSON (for scripting and AI agents)
     #[arg(long, global = true)]
     pub json: bool,
+}
+
+/// Server-AI intent for `diagrams generate --prompt`. Validated here so a typo
+/// is rejected before any network call. The value maps 1:1 to the string the
+/// backend's `/generate` endpoint expects.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum Intent {
+    Auto,
+    Edit,
+    Replace,
+    Drill,
+    Detail,
+    Simplify,
+    Ask,
+}
+
+impl Intent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Intent::Auto => "auto",
+            Intent::Edit => "edit",
+            Intent::Replace => "replace",
+            Intent::Drill => "drill",
+            Intent::Detail => "detail",
+            Intent::Simplify => "simplify",
+            Intent::Ask => "ask",
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -91,10 +119,14 @@ pub enum AppsAction {
         force: bool,
     },
 
-    /// Get or create the public shareable link for an application
+    /// Inspect or revoke a legacy app-wide share link (retired — see `diagrams share`)
     Share {
         /// Application ID
         id: String,
+
+        /// Revoke the legacy app-wide link
+        #[arg(long)]
+        revoke: bool,
     },
 }
 
@@ -127,6 +159,48 @@ pub enum DiagramsAction {
         /// Provide Mermaid directly — server skips AI, still processes drill annotations
         #[arg(short, long, conflicts_with = "prompt")]
         mermaid: Option<String>,
+
+        /// Server-AI intent for the --prompt path (default: auto)
+        #[arg(short, long, conflicts_with = "mermaid", value_enum)]
+        intent: Option<Intent>,
+
+        /// Target an existing AI chat session (see `diagrams sessions`)
+        #[arg(short, long)]
+        session: Option<String>,
+    },
+
+    /// Ask a question about a diagram — server AI answers in prose, no edit
+    Ask {
+        /// Diagram ID
+        id: String,
+
+        /// The question to ask
+        #[arg(short, long)]
+        prompt: String,
+
+        /// Target an existing AI chat session (see `diagrams sessions`)
+        #[arg(short, long)]
+        session: Option<String>,
+    },
+
+    /// Manage AI chat sessions for a diagram
+    Sessions {
+        #[command(subcommand)]
+        action: SessionsAction,
+    },
+
+    /// Get, create, rotate or revoke a diagram's public share link
+    Share {
+        /// Diagram ID
+        id: String,
+
+        /// Mint a new link, invalidating the existing one
+        #[arg(long, conflicts_with = "revoke")]
+        rotate: bool,
+
+        /// Turn sharing off for this diagram
+        #[arg(long, conflicts_with = "rotate")]
+        revoke: bool,
     },
 
     /// Show a diagram's content and structure
@@ -173,16 +247,6 @@ pub enum DiagramsAction {
     /// Return Mermaid format reference — diagram types, syntax rules, limits
     Format,
 
-    /// Apply a targeted diff to a diagram without rewriting the full Mermaid
-    Patch {
-        /// Diagram ID
-        id: String,
-
-        /// JSON diff: {"add_nodes":[...],"add_edges":[...],"remove_nodes":[...],"remove_edges":[...],"update_labels":[...]}
-        #[arg(long)]
-        diff: String,
-    },
-
     /// Save raw Mermaid to a diagram directly, bypassing AI
     Import {
         /// Diagram ID
@@ -191,5 +255,36 @@ pub enum DiagramsAction {
         /// Raw Mermaid source to save
         #[arg(long)]
         mermaid: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SessionsAction {
+    /// List the AI chat sessions for a diagram
+    List {
+        /// Diagram ID
+        id: String,
+    },
+
+    /// Start a new AI chat session on a diagram
+    Create {
+        /// Diagram ID
+        id: String,
+
+        /// Optional session title
+        #[arg(short, long)]
+        title: Option<String>,
+    },
+
+    /// Rename an AI chat session
+    Rename {
+        /// Diagram ID
+        id: String,
+
+        /// Session ID
+        session_id: String,
+
+        /// New title
+        title: String,
     },
 }

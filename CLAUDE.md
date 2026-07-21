@@ -5,7 +5,7 @@ Guidance for Claude Code when working in the `vaxis-cli` repository.
 ## What this is
 
 `vaxis-cli` is the Rust command-line client for **Vaxis**, a hosted diagram/architecture
-design SaaS (Cloudflare Workers API + D1, default host `https://beta.vaxis.dev`). The CLI
+design SaaS (Cloudflare Workers API + D1, default host `https://app.vaxis.dev`). The CLI
 is a thin, auth-aware HTTP client — it renders nothing and runs no AI locally. Its purpose
 is to be **driven by an AI assistant (Claude)**: Claude generates Mermaid, and Vaxis
 persists it, auto-expands "drill" subsystems into a diagram tree, and returns a share link.
@@ -44,8 +44,8 @@ src/
     ├── login.rs       # browser device-flow login (start → open browser → poll)
     ├── me.rs / logout.rs
     ├── config.rs      # config set-url / show
-    ├── apps.rs        # applications: list/create/update/delete/share
-    └── diagrams.rs    # diagrams: list/create/generate/show/tree/undo/rename/delete/patch/import/format
+    ├── apps.rs        # applications: list/create/update/delete/share (legacy read+revoke)
+    └── diagrams.rs    # diagrams: list/create/generate/ask/sessions/share/show/tree/undo/rename/delete/import/format
 ```
 
 - **Flat command pattern.** `main.rs` matches the `Commands` enum and calls one `run()` per
@@ -71,7 +71,7 @@ src/
   `{"error":"not_authenticated"}` (JSON) or a login hint (human) before exiting.
 - **Config file**: `<OS config dir>/vaxis/config.toml` via the `dirs` crate. Holds `auth_url`
   and `user { name, email, token }`. `load()` never panics — malformed/missing → default.
-- **Base URL precedence**: `VAXIS_AUTH_URL` env → `auth_url` in config → `https://beta.vaxis.dev`.
+- **Base URL precedence**: `VAXIS_AUTH_URL` env → `auth_url` in config → `https://app.vaxis.dev`.
 - **Interactive pickers**: `apps`/`diagrams` delete/update accept an optional id; when omitted,
   a `dialoguer::Select`/`Input`/`Confirm` prompt appears. A cancelled prompt exits cleanly (0).
   Guard interactive prompts so they don't fire in `--json`/scripting mode (see `diagrams delete`).
@@ -83,6 +83,16 @@ src/
 - **Two-mode generation** (`diagrams generate`): `--prompt` (server AI generates) vs
   `--mermaid` (Claude supplies Mermaid, server just stores + processes drills). They are
   `conflicts_with` each other. The `--mermaid` path is the primary product flow.
+- **`generate` is not always an edit.** The server routes a `--prompt` turn to Ask when
+  `intent:"ask"` OR when intent is `auto` (the DEFAULT) and the prompt parses as a question
+  — returning `{unchanged:true, answer, drills:[], mermaid:<current content echoed back>}`.
+  `notice` and `mode_mismatch` are the other no-edit turns. `generate` MUST check
+  `unchanged`/`answer` before reporting success: printing "Generated" over the echoed-back
+  Mermaid claims an edit that never happened and throws the answer away. The `--mermaid`
+  path never routes to Ask.
+- **Sharing is per-diagram, not per-app.** One diagram link also unlocks the sub-diagrams
+  it drills into, so share the ROOT diagram. App-wide sharing is retired (see contract
+  above) because a single app link exposes every diagram in the app.
 - **Drill auto-expansion**: after `generate`, the CLI iterates the server's `drills[]` and
   makes a follow-up `POST /api/diagrams/{id}/children` per node, materializing child diagrams.
   A single `generate` can create a parent + many children. Don't break this loop.
@@ -113,16 +123,23 @@ Endpoints the CLI is coupled to (backend's CURRENT paths):
 - **Auth:** `POST /api/cli/start`, `GET /api/cli/poll?state=`, `POST /api/cli/complete`,
   `Bearer <cli_token>` auth.
 - **Apps:** `GET|POST /api/applications`, `GET|PUT|DELETE /api/applications/{id}`,
-  `POST /api/applications/{id}/share`, `GET /api/applications/{id}/diagrams` (list diagrams).
+  `GET|DELETE /api/applications/{id}/share` (legacy app-wide link: read + revoke ONLY —
+  `POST` is retired server-side and hard-throws `410 APP_SHARE_DISABLED`, so the CLI must
+  never call it), `GET /api/applications/{id}/diagrams` (list diagrams).
 - **Diagrams:** `POST /api/diagrams`, `GET|DELETE /api/diagrams/{id}`,
-  `PATCH /api/diagrams/{id}` (rename), `POST /api/diagrams/{id}/generate`,
+  `PATCH /api/diagrams/{id}` (rename),
+  `GET|POST|DELETE /api/diagrams/{id}/share` (per-diagram sharing — the CURRENT share
+  model; returns `{token, edit_token}` and the CLI builds `/view/{token}` +
+  `/collab/{edit_token}`. `POST` is create-OR-**ROTATE**: it mints a new token pair every
+  call, so `diagrams share` reads via `GET` first and only `POST`s when unshared),
+  `POST /api/diagrams/{id}/generate`
+  (request may send `prompt` + `intent` + `chat_session_id`, or `mermaid` for the direct
+  path; `intent:"ask"` powers `diagrams ask` and returns an `answer` field),
   `POST /api/diagrams/{id}/children`, `POST /api/diagrams/{id}/import`,
   `GET /api/diagrams/{id}/tree`, `GET /api/diagrams/{id}/chat`,
+  `GET|POST /api/diagrams/{id}/chat/sessions` (sessions list/create),
+  `PATCH /api/diagrams/{id}/chat/sessions/{sid}` (session rename),
   `DELETE /api/diagrams/{id}/chat/messages/last` (undo).
-
-> ⚠️ Some CLI code still calls STALE paths that the backend has moved/removed
-> (`/api/diagrams?applicationId=`, `.../chat/last`, `.../meta`, `.../patch`). Those commands are
-> currently broken — see `docs/cli-modernization-plan.md` for the fixes.
 
 ## When you change things
 

@@ -196,16 +196,22 @@ vaxis diagrams rename $PAYMENT_ID "Payment Service Detail" --json
 
 ---
 
-## Phase 9 — Share the App
+## Phase 9 — Share a Diagram
+
+Sharing is per-diagram now (app-wide share creation is retired). Share the root
+diagram — one link covers the sub-diagrams it drills into.
 
 ```bash
-vaxis apps share $APP_ID --json
+vaxis diagrams share $ROOT_DIAGRAM_ID --json
 ```
 
 **Expected:**
 ```json
-{ "url": "https://vaxis.dev/view/abc123xyz", "token": "abc123xyz", "created_at": "..." }
+{ "diagram_id": "...", "shared": true, "url": "https://app.vaxis.dev/view/abc123xyz", "token": "abc123xyz", "edit_url": "https://app.vaxis.dev/collab/def456", "edit_token": "def456" }
 ```
+
+`--rotate` mints a new link (invalidating the old one); `--revoke` turns sharing off.
+`vaxis apps share $APP_ID --json` now only reports/revokes a *legacy* app-wide link.
 
 ---
 
@@ -271,6 +277,5 @@ vaxis diagrams format --json
 | `✗ Session expired` | Token stale | Run `vaxis login` again |
 | `✗ Diagram not found` | Wrong ID | Run `vaxis diagrams list $APP_ID --json` to find correct ID |
 | `error: unexpected argument ' '` | Space after `\` in multiline command | Put the whole command on one line |
-| `apps share` returns 404 | Server `/share` endpoint not built yet | Build `POST /api/applications/:id/share` on server |
-| `diagrams import` returns 404 | Server `/import` endpoint not built yet | Build `POST /api/diagrams/:id/import` on server |
-| `diagrams patch` returns 404 | Server `/patch` endpoint not built yet | Build `POST /api/diagrams/:id/patch` on server |
+| `apps share` returns 410 | App-wide share creation is retired (expected) | Use `vaxis diagrams share <diagramId>` instead |
+| `diagrams import` returns 404 | Wrong host / stale deploy | Run `vaxis config show`; confirm the server has `POST /api/diagrams/:id/import` |

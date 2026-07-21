@@ -48,8 +48,9 @@ vaxis apps update <id> --description "New description" --json
 # Delete an application
 vaxis apps delete <id> --force
 
-# Get or create the public shareable link for an application
+# Inspect or revoke a LEGACY app-wide link (retired — cannot create one)
 vaxis apps share <appId> --json
+vaxis apps share <appId> --revoke --json
 ```
 
 ### Diagrams
@@ -60,6 +61,13 @@ vaxis diagrams list <appId> --json
 
 # Create a new diagram
 vaxis diagrams create <appId> "Diagram Name" --json
+
+# Share a diagram (this is THE share command — one link unlocks this diagram
+# plus the sub-diagrams it drills into). Safe to call repeatedly: it returns the
+# existing link if there is one, and only creates a link when there is none.
+vaxis diagrams share <diagramId> --json
+vaxis diagrams share <diagramId> --rotate --json   # mint a new link, breaking the old one
+vaxis diagrams share <diagramId> --revoke --json   # turn sharing off
 
 # Claude provides Mermaid directly (preferred — Claude is the AI, Vaxis stores + processes drills)
 vaxis diagrams generate <diagramId> --mermaid "graph TD
@@ -77,6 +85,17 @@ vaxis diagrams generate <diagramId> --mermaid "graph TD
 
 # Server AI generates (use only when testing server AI directly, not when Claude is the AI)
 vaxis diagrams generate <diagramId> --prompt "Design a payment service with Stripe integration" --json
+# Server-AI intent + chat session are optional (server-AI path only). Default intent is `auto`.
+#   --intent auto|edit|replace|drill|detail|simplify|ask   --session <chatSessionId>
+vaxis diagrams generate <diagramId> --prompt "add a Redis cache between api and db" --intent edit --json
+
+# Ask a question about a diagram — server AI answers in prose, makes no edit
+vaxis diagrams ask <diagramId> --prompt "What talks to the database?" --json
+
+# AI chat sessions (server-AI conversation threads on a diagram)
+vaxis diagrams sessions list <diagramId> --json
+vaxis diagrams sessions create <diagramId> --title "Refactor pass" --json
+vaxis diagrams sessions rename <diagramId> <sessionId> "New title" --json
 
 # Show diagram content (includes current Mermaid + child nodes)
 vaxis diagrams show <diagramId> --json
@@ -97,10 +116,6 @@ vaxis diagrams delete --app-id <appId> --force
 
 # Get full Mermaid format reference (diagram types, syntax rules, limits)
 vaxis diagrams format --json
-
-# Apply a targeted diff — add/remove nodes and edges without rewriting the full Mermaid
-# Use this for small iterative changes to large diagrams (20+ nodes)
-vaxis diagrams patch <diagramId> --diff '{"add_nodes":[{"id":"cache","label":"Redis Cache"}],"add_edges":[{"from":"api","to":"cache","label":"read"}],"remove_nodes":[],"remove_edges":[],"update_labels":[]}' --json
 
 # Save raw user-provided Mermaid directly (no AI call)
 # Use when the user pastes Mermaid from another tool or provides it directly
@@ -131,8 +146,9 @@ vaxis diagrams import <diagramId> --mermaid "graph TD\n    A[User] --> B[API]" -
 
 5. Tell the user what was created. Offer to drill into any subsystem.
 
-6. vaxis apps share <APP_ID> --json
-   → Give the user the shareable link at the end of the session
+6. vaxis diagrams share <ROOT_ID> --json
+   → Give the user the shareable link at the end of the session. Share the ROOT
+     diagram — the link covers the diagrams it drills into.
 ```
 
 ### Workflow 2 — Select project when user hasn't specified one
@@ -351,21 +367,19 @@ Never ask more than one clarifying question before proceeding.
    "Done — deleted Auth Service Prototype and its 2 child diagrams."
 ```
 
-### Workflow 14 — Patch a large diagram (safe iterative update)
+### Workflow 14 — Edit a large diagram (preserve every existing node)
 
 ```
-Use this instead of generate when the diagram has 20+ nodes and only a small change is needed.
+Use this when the diagram has many nodes and only a small change is needed.
+There is no diff/patch endpoint — you are the AI, so you make the edit yourself.
 
-1. vaxis diagrams show <diagramId> --json   → read current_mermaid and understand the node IDs
+1. vaxis diagrams show <diagramId> --json   → read current_mermaid and note every existing node ID
 
-2. vaxis diagrams patch <diagramId> --diff '{
-     "add_nodes": [{"id": "cache", "label": "Redis Cache"}],
-     "add_edges": [{"from": "api", "to": "cache", "label": "read"}],
-     "remove_nodes": [],
-     "remove_edges": [],
-     "update_labels": []
-   }' --json
-   → Returns updated full mermaid — no risk of rewriting existing nodes incorrectly
+2. Edit the Mermaid yourself: carry forward ALL existing nodes and edges unchanged,
+   then add / remove / modify only what the user asked for.
+
+3. vaxis diagrams generate <diagramId> --mermaid "<full updated mermaid>" --json
+   → Resend the COMPLETE diagram. Never drop a node the user didn't ask to remove (see Rule 14).
 ```
 
 ### Workflow 15 — Import user-provided Mermaid
@@ -386,11 +400,11 @@ Use when the user pastes raw Mermaid into the chat or provides it from another t
 ### Workflow 16 — End session with shareable link
 
 ```
-1. vaxis apps share <appId> --json
-   → Returns { "url": "https://beta.vaxis.dev/view/abc123xyz", ... }
+1. vaxis diagrams share <rootDiagramId> --json
+   → Returns { "url": "https://app.vaxis.dev/view/abc123xyz", ... }
 
 2. Give the user the link directly in the chat:
-   "Here's your shareable link: https://beta.vaxis.dev/view/abc123xyz — anyone with this link can view the full architecture."
+   "Here's your shareable link: https://app.vaxis.dev/view/abc123xyz — anyone with this link can view the full architecture."
 ```
 
 ---
@@ -401,14 +415,19 @@ This is an inline reference. You do not need to call `vaxis diagrams format` for
 
 ### Supported diagram types
 
+**Editable / re-generatable types** (only `flowchart` supports drill blocks):
+
 | Type | Keyword | When to use |
 |------|---------|-------------|
-| Flowchart | `graph TD` / `graph LR` | Architecture, service maps, general flows |
-| ER diagram | `erDiagram` | Database schema, entity relationships |
-| Sequence | `sequenceDiagram` | Request/response flows, inter-service calls |
-| State machine | `stateDiagram-v2` | Order lifecycle, auth state, resource states |
-| Class diagram | `classDiagram` | Domain model, OOP hierarchy, type relationships |
-| User journey | `journey` | Onboarding flows, user journeys |
+| Flowchart | `flowchart TB` / `flowchart LR` (`graph TD/LR` also works) | Architecture, services, processes, data flow — **the default**, and the only drillable type |
+| Sequence | `sequenceDiagram` | Request/response, protocol, API interaction, lifecycle over time |
+| Class diagram | `classDiagram` | Object models, domain entities, inheritance/composition |
+| ER diagram | `erDiagram` | Database entities, tables, relationships, cardinality |
+| State machine | `stateDiagram-v2` | Finite states, lifecycle, status transitions, workflow states |
+
+**Image-fallback types** — valid Mermaid, but rendered as a **static image** (NOT editable or drillable). Use only when the user explicitly asks for that family: `gantt`, `pie`, `journey`, `timeline`, `mindmap`, `requirementDiagram`, `C4`, `sankey`, `xychart`, `block`, `kanban`, `radar`, `treemap`, `venn`, and more. (Note: `journey` is image-fallback, **not** an editable type.)
+
+When editing an existing diagram, keep its current type unless the user explicitly asks to convert it.
 
 ### Examples
 
@@ -474,7 +493,40 @@ graph TD
     %% vaxis:drill auth
 ```
 
-Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annotates. The CLI auto-creates child diagrams for every drill block after `generate` returns.
+Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annotates. The CLI auto-creates child diagrams for every drill block after `generate` returns. **Drill blocks work on flowcharts only** — never add them to sequence / class / er / state or any image-fallback diagram.
+
+**Drilling is Vaxis's core feature — use it by default for architecture.** When you draw an architecture or system diagram, structure it as a hierarchy from the start, not a flat single-level graph:
+
+- **Top level = the major subsystems** (services, domains, bounded contexts) — the broad strokes only.
+- **Every composite subsystem gets a `%% vaxis:drill`** — any node with real internal structure worth its own diagram (a service made of components, a subsystem with steps/parts). Its internals belong in the child diagram, not crammed into the root.
+- **Atomic / leaf nodes do NOT drill** — a database, cache, message queue, or external SaaS (e.g. `PostgreSQL`, `Redis`, `Stripe API`) has nothing inside worth a child diagram. Drilling these produces empty, noisy children — don't.
+
+Worked example — "draw a payment system architecture":
+
+```
+graph TD
+    web[Web App]
+    api[API Gateway]
+    auth[Auth Service]
+    %% vaxis:drill auth
+    pay[Payment Service]
+    %% vaxis:drill pay
+    order[Order Service]
+    %% vaxis:drill order
+    db[(PostgreSQL)]
+    cache[(Redis)]
+    web --> api
+    api --> auth
+    api --> pay
+    api --> order
+    order --> db
+    pay --> db
+    api --> cache
+```
+
+The three services drill (composite); the database and cache don't (leaf). Flattening auth/pay/order's internals into the root — or drilling `db`/`cache` — is wrong.
+
+Don't over-fragment: a genuinely small diagram (a handful of nodes with no real subsystems) needs no drills — an empty `drills[]` is correct there. The rule is **"drill composites," not "drill everything."**
 
 ### Node ID rules
 
@@ -487,8 +539,8 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
 
 - Max 50 nodes per diagram
 - Max 60 edges per diagram
-- When a diagram exceeds 30 nodes, use drill blocks to push subsystems into child diagrams
-- Use `patch` instead of `generate` for small changes to large diagrams
+- 50 nodes / 60 edges is a hard ceiling — don't design up to it. Structure architecture as a drill hierarchy from the start (see **"Drilling is Vaxis's core feature"** above): keep the root readable (roughly a dozen major nodes) and push detail into drill children rather than growing one flat diagram toward the cap
+- For small changes to large diagrams, edit `current_mermaid` and resend the full diagram via `generate --mermaid`, preserving every existing node (see Workflow 14)
 
 ---
 
@@ -506,12 +558,49 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
 { "id": "app_xxx", "name": "Payment System", "description": "...", "created_at": "..." }
 ```
 
-### `vaxis apps share --json`
+### `vaxis diagrams share --json`
 ```json
 {
-  "url": "https://beta.vaxis.dev/view/abc123xyz",
+  "diagram_id": "dgm_xxx",
+  "shared": true,
+  "url": "https://app.vaxis.dev/view/abc123xyz",
   "token": "abc123xyz",
-  "created_at": "2026-06-04T10:00:00Z"
+  "edit_url": "https://app.vaxis.dev/collab/def456uvw",
+  "edit_token": "def456uvw"
+}
+```
+`url`/`token` are the read-only view link; `edit_url`/`edit_token` are the collaborative
+edit link. Give people the plain `url` unless they need to edit.
+
+`--revoke` returns `{ "ok": true, "diagram_id": "...", "shared": false }`.
+
+### `vaxis apps share --json`
+App-wide sharing is **retired** — this command can no longer create a link. It only
+reports (and with `--revoke` turns off) a legacy link minted before the cutover:
+```json
+{
+  "id": "app_xxx",
+  "app_share_retired": true,
+  "use_instead": "vaxis diagrams share <diagramId>",
+  "legacy_shared": false
+}
+```
+When `legacy_shared` is `true`, `legacy_url`/`legacy_token` (and the `legacy_edit_*`
+pair) are also present. A legacy link exposes **every** diagram in the app — if you
+find one, tell the user and offer `vaxis apps share <appId> --revoke`.
+
+### `vaxis diagrams ask --json`
+```json
+{ "answer": "The API Gateway and the Payment Service both write to PostgreSQL.", "unchanged": true, "chat_session_id": "sess_xxx" }
+```
+
+### `vaxis diagrams sessions list --json`
+```json
+{
+  "sessions": [
+    { "id": "sess_xxx", "title": "Main", "is_active": 1, "message_count": 4, "created_at": "...", "updated_at": "..." }
+  ],
+  "active_chat_session_id": "sess_xxx"
 }
 ```
 
@@ -555,6 +644,25 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
 }
 ```
 
+**A `--prompt` generate does not always edit the diagram.** The server routes the turn
+to Ask when `--intent ask` is given *or* when the intent is `auto` (the default) and the
+prompt reads as a question. It also declines no-op or mode-mismatched turns. Those
+responses look like this instead — note `unchanged: true` and the empty `drills`:
+```json
+{
+  "diagram_id": "diag_xxx",
+  "mermaid": "graph TD\n    ...",
+  "drills": [],
+  "unchanged": true,
+  "answer": "The auth service validates the JWT before the gateway routes ..."
+}
+```
+When `unchanged` is `true`, **`mermaid` is the diagram's existing content echoed back, not
+a new version — do not treat it as an edit and do not report one.** Surface `answer` (or
+`notice` / `mode_mismatch.message` when there is no `answer`) to the user. If you wanted an
+edit, re-run with an explicit `--intent edit|replace|drill`, or supply `--mermaid` yourself.
+The `--mermaid` path never routes to Ask.
+
 ### `vaxis diagrams tree --json`
 ```json
 {
@@ -577,28 +685,27 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
 ### `vaxis diagrams format --json`
 ```json
 {
-  "supported_types": [
+  "editable_types": [
     {
       "type": "flowchart",
-      "keyword": "graph TD / graph LR",
-      "when": "Architecture, service maps, general flows",
-      "example": "graph TD\n    A[User] --> B[API Gateway]"
+      "keyword": "flowchart TB / flowchart LR (graph TD/LR also works)",
+      "when": "Architecture, services, processes, data flow, general diagrams",
+      "drillable": true,
+      "example": "flowchart TB\n    A[User] --> B[API Gateway]"
     }
   ],
+  "editable_types_note": "These 5 types (flowchart, sequence, class, er, state) are editable/re-generatable in Vaxis. Only flowchart supports drill blocks / child diagrams. Prefer flowchart for general architecture.",
+  "image_fallback_types": ["gantt", "pie", "journey", "timeline", "mindmap", "..."],
+  "image_fallback_note": "Valid Mermaid, but rendered as a static image in Vaxis — NOT editable or drillable. Use only when the user explicitly asks for that family. Note: 'journey' is image-fallback here, not an editable type.",
   "drill_syntax": "%% vaxis:drill <nodeId>",
+  "drill_description": "FLOWCHART ONLY. Do NOT use drill blocks with sequence/class/er/state or any image-fallback type.",
+  "preserve_type_on_edit": "When editing an existing diagram, keep its current type unless the user explicitly asks to convert it.",
   "node_id_rules": ["alphanumeric and underscores only", "no spaces"],
   "limits": { "max_nodes_per_diagram": 50, "max_edges_per_diagram": 60 },
-  "best_practices": ["graph TD for architecture", "graph LR for pipelines"]
+  "best_practices": ["flowchart TB for architecture", "flowchart LR for pipelines"]
 }
 ```
-
-### `vaxis diagrams patch --json`
-```json
-{
-  "diagram_id": "diag_xxx",
-  "mermaid": "graph TD\n    A[User] --> B[API Gateway]\n    B --> C[Redis Cache]\n    ..."
-}
-```
+Full response includes all 5 editable types (flowchart, sequence, class, er, state) and the complete `image_fallback_types` list — see `format_cmd` in `src/commands/diagrams.rs` for the authoritative shape.
 
 ### `vaxis diagrams undo --json`
 ```json
@@ -631,7 +738,7 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
 | Server unreachable (connection error) | Tell the user the server may be down. Suggest running `vaxis config show` to verify the URL is correct. |
 | `generate` returns a Mermaid parse error or garbled output | Run `vaxis diagrams undo <id>` immediately, then retry `generate` with a more explicit prompt. Never call `generate` again without undoing first. |
 | 404 on a diagram or app ID | The ID may be wrong or the resource was deleted. Run `vaxis apps list --json` → `vaxis diagrams list <appId> --json` to rediscover the correct ID. |
-| `drills` array is empty after `generate` | The AI did not mark any nodes for drilling. This is fine for simple diagrams. Offer to drill manually into any node the user points to. |
+| `drills` array is empty after `generate` | Fine for a genuinely small diagram with no real subsystems. But if you just drew an **architecture** with composite subsystems and got no drills, you under-structured it (Rule 15) — add `%% vaxis:drill` to each composite node and regenerate. |
 | User gives ambiguous instruction ("update the diagram") | Run Workflow 12 — ask which diagram, ask what change, then proceed. Never guess. |
 | User refers to a subsystem by name ("the auth flow") | Check conversation context first. If diagram IDs are already known, use them. Otherwise run `vaxis diagrams tree --json` to find the correct child diagram ID. |
 
@@ -641,7 +748,7 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
 
 1. **Always check before creating.** Run `vaxis apps list --json` before `apps create`. If a matching app exists, ask the user whether to continue it or start fresh. If the list is empty, guide the user into creation — do not ask them to create manually.
 
-2. **Always read before writing.** Run `vaxis diagrams show --json` before `generate` or `patch`. Use `current_mermaid` to understand what already exists. Never overwrite blindly.
+2. **Always read before writing.** Run `vaxis diagrams show --json` before `generate`. Use `current_mermaid` to understand what already exists. Never overwrite blindly.
 
 3. **Use tree to find the right diagram.** Never guess diagram IDs. Run `vaxis diagrams tree --json` to navigate to the correct level.
 
@@ -662,9 +769,9 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
    - Root diagrams use broad strokes (services, domains); child diagrams use fine detail (functions, data, steps)
    - Never produce a flat list of nodes with no edges — every diagram must show relationships
 
-9. **Use patch for targeted edits on large diagrams.** If the user asks to add or remove specific nodes and the diagram already has 20+ nodes, prefer `vaxis diagrams patch` over `generate`. This prevents accidentally rewriting or renaming existing nodes.
+9. **Edit large diagrams by regenerating with care.** If the user asks to add or remove specific nodes on a diagram that already has many nodes, read `current_mermaid` first, then resend the FULL updated Mermaid via `generate --mermaid` — carrying every existing node forward unchanged. There is no diff/patch endpoint; you are the AI, so you make the edit (see Workflow 14 and Rule 14).
 
-10. **End every session with a shareable link.** After completing a design session, call `vaxis apps share <appId> --json` and give the user the link directly. They should never need to open the web app to find it.
+10. **End every session with a shareable link.** After completing a design session, call `vaxis diagrams share <rootDiagramId> --json` and give the user the link directly. They should never need to open the web app to find it. Share the ROOT diagram — one link covers the sub-diagrams it drills into. Never `--rotate` just to fetch a link; a plain `share` already returns the existing one, and rotating breaks links the user has handed out.
 
 11. **Reuse context before fetching.** If diagram IDs or app IDs were established earlier in the conversation, use them directly. Only re-fetch with `apps list` or `diagrams list` when the context is genuinely unclear.
 
@@ -673,3 +780,5 @@ Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annota
 13. **Confirm before destructive actions.** Before running `delete` on a diagram or application, always ask for confirmation and state what will be cascaded. After deletion, report exactly what was removed.
 
 14. **Preserve existing nodes on every update.** When updating a diagram, read `current_mermaid` first and carry forward all existing nodes. Only modify what the user asked to change. No node should disappear from an update unless the user explicitly asked to remove it.
+
+15. **Drill by default — it's the core feature.** When generating an architecture, never emit a flat single-level diagram. Structure it as a hierarchy: major subsystems at the root, a `%% vaxis:drill` on every composite subsystem, and no drills on leaf/atomic nodes (databases, caches, external services). A diagram that could have subsystems but has none is a missed use of Vaxis. See **"Drilling is Vaxis's core feature"** in the Drill syntax section for the composite-vs-leaf rule and a worked example.
