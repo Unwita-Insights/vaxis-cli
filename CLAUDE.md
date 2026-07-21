@@ -45,7 +45,7 @@ src/
     ├── me.rs / logout.rs
     ├── config.rs      # config set-url / show
     ├── apps.rs        # applications: list/create/update/delete/share (legacy read+revoke)
-    └── diagrams.rs    # diagrams: list/create/generate/show/tree/undo/rename/delete/patch/import/format
+    └── diagrams.rs    # diagrams: list/create/generate/ask/sessions/share/show/tree/undo/rename/delete/import/format
 ```
 
 - **Flat command pattern.** `main.rs` matches the `Commands` enum and calls one `run()` per

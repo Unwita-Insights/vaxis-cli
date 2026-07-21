@@ -685,20 +685,27 @@ The `--mermaid` path never routes to Ask.
 ### `vaxis diagrams format --json`
 ```json
 {
-  "supported_types": [
+  "editable_types": [
     {
       "type": "flowchart",
-      "keyword": "graph TD / graph LR",
-      "when": "Architecture, service maps, general flows",
-      "example": "graph TD\n    A[User] --> B[API Gateway]"
+      "keyword": "flowchart TB / flowchart LR (graph TD/LR also works)",
+      "when": "Architecture, services, processes, data flow, general diagrams",
+      "drillable": true,
+      "example": "flowchart TB\n    A[User] --> B[API Gateway]"
     }
   ],
+  "editable_types_note": "These 5 types (flowchart, sequence, class, er, state) are editable/re-generatable in Vaxis. Only flowchart supports drill blocks / child diagrams. Prefer flowchart for general architecture.",
+  "image_fallback_types": ["gantt", "pie", "journey", "timeline", "mindmap", "..."],
+  "image_fallback_note": "Valid Mermaid, but rendered as a static image in Vaxis — NOT editable or drillable. Use only when the user explicitly asks for that family. Note: 'journey' is image-fallback here, not an editable type.",
   "drill_syntax": "%% vaxis:drill <nodeId>",
+  "drill_description": "FLOWCHART ONLY. Do NOT use drill blocks with sequence/class/er/state or any image-fallback type.",
+  "preserve_type_on_edit": "When editing an existing diagram, keep its current type unless the user explicitly asks to convert it.",
   "node_id_rules": ["alphanumeric and underscores only", "no spaces"],
   "limits": { "max_nodes_per_diagram": 50, "max_edges_per_diagram": 60 },
-  "best_practices": ["graph TD for architecture", "graph LR for pipelines"]
+  "best_practices": ["flowchart TB for architecture", "flowchart LR for pipelines"]
 }
 ```
+Full response includes all 5 editable types (flowchart, sequence, class, er, state) and the complete `image_fallback_types` list — see `format_cmd` in `src/commands/diagrams.rs` for the authoritative shape.
 
 ### `vaxis diagrams undo --json`
 ```json
