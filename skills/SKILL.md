@@ -70,18 +70,19 @@ vaxis diagrams share <diagramId> --rotate --json   # mint a new link, breaking t
 vaxis diagrams share <diagramId> --revoke --json   # turn sharing off
 
 # Claude provides Mermaid directly (preferred — Claude is the AI, Vaxis stores + processes drills)
+# Drill markers go at COLUMN 0 (no indentation) AFTER the complete main diagram — see "Drill syntax".
 vaxis diagrams generate <diagramId> --mermaid "graph TD
     ui[Web App]
     api[API Gateway]
     auth[Auth Service]
-    %% vaxis:drill auth
     pay[Payment Service]
-    %% vaxis:drill pay
     db[(PostgreSQL)]
     ui -->|HTTPS| api
     api -->|validates| auth
     api -->|charges| pay
-    pay --> db" --json
+    pay --> db
+%% vaxis:drill auth
+%% vaxis:drill pay" --json
 
 # Server AI generates (use only when testing server AI directly, not when Claude is the AI)
 vaxis diagrams generate <diagramId> --prompt "Design a payment service with Stripe integration" --json
@@ -442,7 +443,6 @@ graph TD
         api[API Gateway]
         auth[Auth Service]
         pay[Payment Service]
-        %% vaxis:drill pay
     end
     db[(PostgreSQL)]
     ui -->|"HTTPS"| api
@@ -450,6 +450,7 @@ graph TD
     api -->|"validates"| auth
     api -->|"charges"| pay
     pay --> db
+%% vaxis:drill pay
 ```
 
 **ER diagram**
@@ -482,18 +483,53 @@ stateDiagram-v2
 
 ### Drill syntax
 
-Mark any node that needs its own child diagram:
+Mark any node that needs its own child diagram. **Write the complete main diagram
+first (every node AND every edge), then list the drill markers after it:**
 
 ```
 graph TD
     api[API Gateway]
     payment[Payment Service]
-    %% vaxis:drill payment
     auth[Auth Service]
-    %% vaxis:drill auth
+    api --> payment
+    api --> auth
+%% vaxis:drill payment
+%% vaxis:drill auth
 ```
 
-Place `%% vaxis:drill <nodeId>` on the line immediately after the node it annotates. The CLI auto-creates child diagrams for every drill block after `generate` returns. **Drill blocks work on flowcharts only** — never add them to sequence / class / er / state or any image-fallback diagram.
+**Three rules — break any one and you silently get zero drills:**
+
+1. **Column 0, no indentation.** Each `%% vaxis:drill <nodeId>` must start at the very
+   beginning of its line. The server only recognises a marker matching `^%% vaxis:drill`;
+   an indented marker is treated as an ordinary Mermaid comment and ignored.
+2. **After the complete main diagram, never between its nodes.** Everything *before* the
+   first marker is the main diagram; everything *after* a marker (up to the next marker)
+   is treated as that node's child content. A marker placed mid-diagram therefore swallows
+   the nodes and edges that follow it into a drill block and mangles the main diagram.
+3. **`<nodeId>` must be a node defined in the main diagram above** (exact ID). Markers whose
+   ID isn't a real node in the main diagram are dropped.
+
+Leave a marker bare (as above) to auto-create an **empty** child you fill later with a
+separate `generate <childId> --mermaid`. Optionally, seed the child in the same call by
+following the marker with a full sub-diagram:
+
+```
+graph TD
+    api[API Gateway]
+    auth[Auth Service]
+    api --> auth
+%% vaxis:drill auth
+flowchart TB
+    login[Login]
+    tokenMgr[Token Manager]
+    login --> tokenMgr
+```
+
+A seeded child contains ONLY that node's new internals — never repeat a parent node ID
+inside it, and drill blocks are one level deep (a child may not contain its own markers).
+The CLI auto-creates a child diagram for every marker after `generate` returns. **Drill
+blocks work on flowcharts only** — never add them to sequence / class / er / state or any
+image-fallback diagram.
 
 **Drilling is Vaxis's core feature — use it by default for architecture.** When you draw an architecture or system diagram, structure it as a hierarchy from the start, not a flat single-level graph:
 
@@ -508,11 +544,8 @@ graph TD
     web[Web App]
     api[API Gateway]
     auth[Auth Service]
-    %% vaxis:drill auth
     pay[Payment Service]
-    %% vaxis:drill pay
     order[Order Service]
-    %% vaxis:drill order
     db[(PostgreSQL)]
     cache[(Redis)]
     web --> api
@@ -522,6 +555,9 @@ graph TD
     order --> db
     pay --> db
     api --> cache
+%% vaxis:drill auth
+%% vaxis:drill pay
+%% vaxis:drill order
 ```
 
 The three services drill (composite); the database and cache don't (leaf). Flattening auth/pay/order's internals into the root — or drilling `db`/`cache` — is wrong.
