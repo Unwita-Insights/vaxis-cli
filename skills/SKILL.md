@@ -569,8 +569,8 @@ Don't over-fragment: a genuinely small diagram (a handful of nodes with no real 
 You are the AI on the `--mermaid` path — there is no server-side styling pass behind you, so
 apply these yourself or your diagrams will render visibly plainer than ones made via
 `generate --prompt` (the server AI gets an equivalent set of rules). These are a **condensed
-mirror** of `vaxis`'s own prompt rules (`S_FLOWCHART_SHAPES`, `S_COLOR`, `S_DRILL` in
-`apps/api/src/prompts.ts`, and `STORAGE_KEYWORD_TOKENS` in
+mirror** of `vaxis`'s own prompt rules (`S_FLOWCHART_SHAPES`, `S_COLOR`, `S_OUTPUT_FLOWCHART`,
+`S_DRILL` in `apps/api/src/prompts.ts`, and `STORAGE_KEYWORD_TOKENS` in
 `packages/scene-serializer/src/shapeRules.ts`) — see the STRONG RULE in this repo's
 `CLAUDE.md` if that source ever needs re-checking for drift.
 

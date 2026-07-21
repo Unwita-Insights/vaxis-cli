@@ -146,7 +146,8 @@ coloring, fan-out cap, auto-drill threshold) is a condensed mirror of the system
 `vaxis` backend gives its own server-side AI**, so that Claude (via `diagrams generate
 --mermaid`) produces visually consistent diagrams with the server-AI path (`generate
 --prompt`). The mirrored source, in the `vaxis` repo:
-- `S_FLOWCHART_SHAPES`, `S_COLOR`, `S_DRILL` in `apps/api/src/prompts.ts`.
+- `S_FLOWCHART_SHAPES`, `S_COLOR`, `S_OUTPUT_FLOWCHART` (fan-out cap, layout cleanliness,
+  subgraph grouping syntax), `S_DRILL` in `apps/api/src/prompts.ts`.
 - `STORAGE_KEYWORD_TOKENS` / `STORAGE_KEYWORDS_PLAIN` in `packages/scene-serializer/src/shapeRules.ts`.
 
 This is a **prose mirror, not shared code** — the CLI is Rust and cannot import a TS module, so
