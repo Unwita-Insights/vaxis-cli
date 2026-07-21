@@ -579,7 +579,7 @@ mirror** of `vaxis`'s own prompt rules (`S_FLOWCHART_SHAPES`, `S_COLOR`, `S_DRIL
 | Shape | Syntax | When |
 |---|---|---|
 | Rectangle | `nodeId["Label"]` | Default — services, APIs, gateways, UIs, load balancers. Even "gateway" stays a rectangle — diamonds squeeze text. |
-| Cylinder | `nodeId[("Label")]` | **Required** whenever the label contains a storage word: `db`, `database`, `store`, `storage`, `cache`, `queue`, `bucket`, `table`, `log`, `index`, `vector store`, `blob`, `s3`, `redis`, `postgres(ql)`, `mongo(db)`, `mysql`, `sqlite`, `kafka`, `sqs`, `d1`, `kv`, `r2`, `sql`, `nosql`, `dynamodb`, `firestore`, `memcached`, `elasticsearch`, `gcs` (case-insensitive, whole word). |
+| Cylinder | `nodeId[("Label")]` | **Required** whenever the label contains a storage word (case-insensitive, whole-word match): `db`, `database`, `store`, `storage`, `cache`, `queue`, `bucket`, `table`, `log`, `index`, `vector store`, `blob`, `s3`, `redis`, `postgres(ql)`, `mongo(db)`, `mysql`, `sqlite`, `kafka`, `sqs`, `d1`, `kv`, `r2`, `sql`, `nosql`, `dynamodb`, `firestore`, `memcached`, `elasticsearch`, `gcs`. |
 | Rhombus | `nodeId{"Label?"}` | **Required** only when the label is a genuine yes/no branch (ends in `?`) — `authCheck{"Authenticated?"}`. Never for a service name. |
 
 **Forbidden for new nodes** (won't render correctly in Vaxis): hexagon `{{"..."}}`, stadium `(["..."])`, circle `(("..."))`, Mermaid v11 `nodeId@{shape:...}`, or any "shape-name in parens" like `nodeId(rounded["..."])`. Exception: an *existing* node already using one of these — copy it through unchanged, don't reshape it.
