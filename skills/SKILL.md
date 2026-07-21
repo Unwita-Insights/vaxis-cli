@@ -165,13 +165,18 @@ vaxis diagrams import <diagramId> --mermaid "graph TD\n    A[User] --> B[API]" -
 3. vaxis diagrams create <APP_ID> "<name> Architecture" --json
    → Save the returned id as ROOT_ID
 
-4. Generate the Mermaid yourself based on the user's description, then save it:
+4. If the description is too thin to draw accurately, clarify FIRST (Rule 17):
+   → Ask 2–4 focused questions with selectable options (Claude Code: AskUserQuestion)
+     — main components? what connects to what? datastore? external services?
+   → Skip this when the description is already specific enough to draw something useful.
+
+5. Generate the Mermaid yourself based on the description (and answers), then save it:
    vaxis diagrams generate <ROOT_ID> --mermaid "<your-generated-mermaid>" --json
    → For each entry in drills[]: save diagram_id as child diagram IDs
 
-5. Tell the user what was created. Offer to drill into any subsystem.
+6. Tell the user what was created. Offer to drill into any subsystem.
 
-6. vaxis diagrams share <ROOT_ID> --json
+7. vaxis diagrams share <ROOT_ID> --json
    → Give the user the shareable link at the end of the session. Share the ROOT
      diagram — the link covers the diagrams it drills into.
 ```
@@ -844,3 +849,10 @@ Full response includes all 5 editable types (flowchart, sequence, class, er, sta
 15. **Drill by default — it's the core feature.** When generating an architecture, never emit a flat single-level diagram. Structure it as a hierarchy: major subsystems at the root, a `%% vaxis:drill` on every composite subsystem, and no drills on leaf/atomic nodes (databases, caches, external services). A diagram that could have subsystems but has none is a missed use of Vaxis. See **"Drilling is Vaxis's core feature"** in the Drill syntax section for the composite-vs-leaf rule and a worked example.
 
 16. **Honor the user's generation mode.** Before generating, check `vaxis config show`. If `generation_mode = prompt`, generate via `--prompt` (Vaxis server AI). If it is `mermaid`, unset, or unavailable, write the Mermaid yourself and use `--mermaid` (the default). See **"Generation mode"** near the top of this skill. Never switch modes on your own — the flag you pass must match the stored preference.
+
+17. **Clarify before drawing from a thin description — ask with options, not free text.** When a diagram request lacks the detail needed for an accurate result (e.g. "draw my app" with no components, stack, or data flow named), gather what's missing **before** generating:
+    - Ask a focused batch of clarifying questions (2–4) covering the key unknowns: the main components/services, what connects to what, datastores, and external services (Stripe, S3, auth provider…).
+    - **Present them as structured multiple-choice questions with selectable options — not free text — whenever your tools allow it.** In Claude Code, use the **`AskUserQuestion`** tool (2–4 concrete options per question, multi-select where several apply, and always offer an "Other" escape). If your environment has no such tool, ask the same questions concisely in text.
+    - Generate the diagram from the answers.
+
+    Don't over-ask: if the request is already specific enough to draw something useful, draw it and offer to refine. One good round of option-based questions beats a vague diagram the user has to fix. (Consistent with Rule 12 — a focused round, never an endless back-and-forth.) This applies to the `--mermaid` path where you author the diagram; on `--prompt`, Vaxis's server AI handles the request directly.
