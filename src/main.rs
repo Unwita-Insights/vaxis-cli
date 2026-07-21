@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod commands;
+mod mermaid_lint;
 
 use clap::Parser;
 use cli::{Cli, Commands};

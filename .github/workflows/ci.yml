@@ -1,0 +1,26 @@
+name: CI
+
+# Runs the Rust test suite on every PR and on pushes to main. This is what
+# enforces the drill-syntax regression guard (skill_md_drill_examples_produce_drills
+# in src/mermaid_lint.rs): without cargo test in CI, a future edit that re-breaks
+# the SKILL.md drill examples would merge unnoticed. Note the publish workflow only
+# runs `cargo build`, which never executes #[test] functions — hence this job.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: cargo test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain versions
+        run: rustc --version && cargo --version
+
+      - name: Run tests
+        run: cargo test --locked --verbose
