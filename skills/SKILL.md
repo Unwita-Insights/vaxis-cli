@@ -594,6 +594,47 @@ The three services drill (composite); the database and cache don't (leaf). Flatt
 
 Don't over-fragment: a genuinely small diagram (a handful of nodes with no real subsystems) needs no drills — an empty `drills[]` is correct there. The rule is **"drill composites," not "drill everything."**
 
+### Shape & color conventions
+
+You are the AI on the `--mermaid` path — there is no server-side styling pass behind you, so
+apply these yourself or your diagrams will render visibly plainer than ones made via
+`generate --prompt` (the server AI gets an equivalent set of rules). These are a **condensed
+mirror** of `vaxis`'s own prompt rules (`S_FLOWCHART_SHAPES`, `S_COLOR`, `S_OUTPUT_FLOWCHART`,
+`S_DRILL` in `apps/api/src/prompts.ts`, and `STORAGE_KEYWORD_TOKENS` in
+`packages/scene-serializer/src/shapeRules.ts`) — see the STRONG RULE in this repo's
+`CLAUDE.md` if that source ever needs re-checking for drift.
+
+**Shape mapping (flowcharts, software diagrams) — not optional, self-check before returning:**
+
+| Shape | Syntax | When |
+|---|---|---|
+| Rectangle | `nodeId["Label"]` | Default — services, APIs, gateways, UIs, load balancers. Even "gateway" stays a rectangle — diamonds squeeze text. |
+| Cylinder | `nodeId[("Label")]` | **Required** whenever the label contains a storage word (case-insensitive, whole-word match): `db`, `database`, `store`, `storage`, `cache`, `queue`, `bucket`, `table`, `log`, `index`, `vector store`, `blob`, `s3`, `redis`, `postgres(ql)`, `mongo(db)`, `mysql`, `sqlite`, `kafka`, `sqs`, `d1`, `kv`, `r2`, `sql`, `nosql`, `dynamodb`, `firestore`, `memcached`, `elasticsearch`, `gcs`. |
+| Rhombus | `nodeId{"Label?"}` | **Required** only when the label is a genuine yes/no branch (ends in `?`) — `authCheck{"Authenticated?"}`. Never for a service name. |
+
+**Forbidden for new nodes** (won't render correctly in Vaxis): hexagon `{{"..."}}`, stadium `(["..."])`, circle `(("..."))`, Mermaid v11 `nodeId@{shape:...}`, or any "shape-name in parens" like `nodeId(rounded["..."])`. Exception: an *existing* node already using one of these — copy it through unchanged, don't reshape it.
+
+**Subgraphs, if you use them, MUST be individually colored** — an unstyled subgraph renders as a bare wireframe box:
+```
+subgraph backendLayer["Backend"]
+    api["API Gateway"]
+    auth["Auth Service"]
+end
+style backendLayer fill:#FFF3E0,stroke:#BF360C,color:#BF360C
+```
+Give each subgraph its own distinct soft fill + darker stroke (e.g. rotate through `#E1F5FE`,
+`#E8F5E9`, `#FFF3E0`, `#F3E5F5`, `#ECEFF1`) — never leave one unstyled while others are colored.
+Keep subgraphs flat (never nested).
+
+**Fan-out cap:** at most ~4 connections (in + out) per node. A node wired to 5+ peers renders
+as a tangled star — route the extras through the layer/bus that owns them instead of wiring
+everything directly to one hub.
+
+**Drill by default at scale:** a fresh SOFTWARE system with **4 or more composite services**
+gets a drill block per composite service as the default posture, not an exception — this
+sharpens the composite-vs-leaf rule above with the server AI's own numeric threshold. Fewer
+than 4 composite services, or a genuinely small/simple ask, needs no drills.
+
 ### Node ID rules
 
 - Alphanumeric and underscores only — **no spaces**
