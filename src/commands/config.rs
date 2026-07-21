@@ -14,8 +14,9 @@ pub fn run(action: ConfigAction) {
             println!("{} Server URL set to {}", "✓".green().bold(), url.cyan());
         }
         ConfigAction::SetMode { mode } => {
+            let mode = mode.as_str();
             let mut cfg = config::load();
-            cfg.generation_mode = Some(mode.clone());
+            cfg.generation_mode = Some(mode.to_string());
             config::save(&cfg);
             let human = if mode == "prompt" { "Vaxis server AI" } else { "your own AI (Claude / Codex)" };
             println!("{} Generation mode set to {} ({})", "✓".green().bold(), mode.cyan(), human);

@@ -73,9 +73,10 @@ fn ensure_generation_mode(json: bool) {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return;
     }
+    // Flag first so the labels don't depend on manual column alignment.
     let options = [
-        "Your own AI (Claude / Codex) writes the diagrams — recommended  [--mermaid]",
-        "Vaxis's own AI generates the diagrams for you                   [--prompt]",
+        "--mermaid — your own AI (Claude / Codex) writes the diagrams (recommended)",
+        "--prompt — Vaxis's own AI generates the diagrams for you",
     ];
     let choice = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("How should Vaxis generate diagrams? (saved — you won't be asked again)")
@@ -128,9 +129,11 @@ pub async fn run(action: DiagramsAction, json: bool) {
                 }
                 std::process::exit(1);
             }
-            // First real generate: capture the user's mode preference once (no-op
-            // when already set / non-interactive). Doesn't change THIS command —
-            // the passed flag wins — it just records the default for the assistant.
+            // Capture the user's mode preference once (no-op when already set /
+            // non-interactive). The flag passed to THIS call always wins — the
+            // assistant may still pass --prompt when the stored mode is mermaid,
+            // or vice versa; this only sets the default that assistants read from
+            // `config show`, it never overrides an explicit flag.
             ensure_generation_mode(json);
             generate(&token, &id, prompt.as_deref(), mermaid.as_deref(), intent.map(|i| i.as_str()), session.as_deref(), json).await
         }
