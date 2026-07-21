@@ -76,6 +76,12 @@ pub enum ConfigAction {
     /// Set the Vaxis server URL (e.g. http://localhost:3000)
     SetUrl { url: String },
 
+    /// Set how diagrams are generated: `mermaid` (your own AI writes them) or `prompt` (Vaxis server AI)
+    SetMode {
+        #[arg(value_parser = ["mermaid", "prompt"])]
+        mode: String,
+    },
+
     /// Show current configuration
     Show,
 }
