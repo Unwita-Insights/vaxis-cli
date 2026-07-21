@@ -6,6 +6,11 @@ use std::path::PathBuf;
 pub struct Config {
     pub auth_url: Option<String>,
     pub user: Option<UserProfile>,
+    /// How diagrams are generated: `"mermaid"` (the driving AI — Claude/Codex —
+    /// writes the Mermaid itself) or `"prompt"` (Vaxis's server AI generates it).
+    /// Set once on the first interactive `diagrams generate`; the assistant reads
+    /// it via `config show` and honors it (see skills/SKILL.md).
+    pub generation_mode: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -43,6 +48,18 @@ pub fn clear() {
     if path.exists() {
         fs::remove_file(path).expect("cannot remove config file");
     }
+}
+
+/// The stored generation-mode preference, if the user has set one.
+pub fn generation_mode() -> Option<String> {
+    load().generation_mode
+}
+
+/// Persist the generation-mode preference (`"mermaid"` or `"prompt"`).
+pub fn set_generation_mode(mode: &str) {
+    let mut cfg = load();
+    cfg.generation_mode = Some(mode.to_string());
+    save(&cfg);
 }
 
 pub const DEFAULT_AUTH_URL: &str = "https://app.vaxis.dev";
