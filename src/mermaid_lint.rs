@@ -79,6 +79,18 @@ fn parse_marker(line: &str) -> Option<&str> {
     }
 }
 
+/// Does this line look like it is TRYING to be a drill marker — a `%%` comment
+/// whose content begins with `vaxis:drill`? Used to flag MALFORMED markers
+/// (indented, missing id, trailing junk) without false-flagging node labels or
+/// prose that merely contain the literal text `vaxis:drill` (e.g. a diagram that
+/// documents Vaxis itself), which are not `%% vaxis:drill …` comments.
+fn looks_like_drill_marker(line: &str) -> bool {
+    match line.trim_start().strip_prefix("%%") {
+        Some(rest) => rest.trim_start().starts_with("vaxis:drill"),
+        None => false,
+    }
+}
+
 fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
@@ -180,16 +192,18 @@ pub fn lint(mermaid: &str) -> LintReport {
     let mut issues = Vec::new();
     let a = analyze(mermaid);
 
-    // E1 — a line that clearly means to be a drill marker but the server won't
-    // recognise it (indented, or otherwise malformed). This is the exact bug
-    // that made every documented drill example silently produce zero drills.
+    // E1 — a line that means to be a drill marker (a `%% vaxis:drill …` comment)
+    // but the server won't recognise it: indented, or otherwise malformed. This
+    // is the exact bug that made every documented drill example silently produce
+    // zero drills. Gated on looks_like_drill_marker so a node label or prose that
+    // merely contains the text `vaxis:drill` is NOT flagged.
     for (i, line) in mermaid.split('\n').enumerate() {
-        if line.contains("vaxis:drill") && parse_marker(line).is_none() {
+        if looks_like_drill_marker(line) && parse_marker(line).is_none() {
             issues.push(Issue {
                 level: Level::Error,
                 code: "drill_marker_not_at_column_0",
                 message: format!(
-                    "Line {}: drill marker not recognised. Write `%% vaxis:drill <nodeId>` at the very start of the line (column 0 — no indentation).",
+                    "Line {}: not a valid drill marker. Write it exactly as `%% vaxis:drill <nodeId>` at the start of the line (column 0 — no indentation).",
                     i + 1
                 ),
                 line: Some(i + 1),
@@ -304,6 +318,25 @@ mod tests {
         let r = lint(m);
         assert!(r.has_errors());
         assert!(r.errors().any(|e| e.code == "drill_marker_not_at_column_0"));
+        assert!(drill_node_ids(m).is_empty());
+    }
+
+    #[test]
+    fn label_text_mentioning_drill_is_not_flagged() {
+        // The literal text `vaxis:drill` inside a node label must not be mistaken
+        // for a malformed marker — it isn't a `%% vaxis:drill …` comment. Common
+        // in diagrams that document Vaxis itself.
+        let m = "graph TD\n    note[\"Use %% vaxis:drill auth at column 0\"]";
+        let r = lint(m);
+        assert!(!r.has_errors(), "unexpected errors: {:?}", r.issues);
+    }
+
+    #[test]
+    fn comment_merely_mentioning_drill_is_not_flagged() {
+        // A genuine comment that references the term but isn't a marker.
+        let m = "graph TD\n    a[A] --> b[B]\n%% remember to add vaxis:drill markers after the diagram";
+        let r = lint(m);
+        assert!(!r.has_errors(), "unexpected errors: {:?}", r.issues);
         assert!(drill_node_ids(m).is_empty());
     }
 
