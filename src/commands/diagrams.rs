@@ -877,7 +877,7 @@ async fn ask(token: &str, id: &str, prompt: &str, session: Option<&str>, json: b
         eprintln!("{} {}", "⚠".yellow(), msg);
         if let Some(intent) = mm["suggested_intent"].as_str() {
             eprintln!(
-                "  {} vaxis diagrams generate {} --prompt \"…\" --intent {}",
+                "  {} vaxis diagrams generate {} --prompt \"<prompt>\" --intent {}",
                 "Try:".dimmed(),
                 id,
                 intent

@@ -701,6 +701,11 @@ find one, tell the user and offer `vaxis apps share <appId> --revoke`.
 { "answer": "The API Gateway and the Payment Service both write to PostgreSQL.", "unchanged": true, "chat_session_id": "sess_xxx" }
 ```
 
+If the prompt reads like an edit rather than a question, the server returns a `mode_mismatch` object with a suggested intent:
+```json
+{ "mode_mismatch": { "message": "That looks like a request to change the diagram.", "suggested_intent": "edit" }, "unchanged": true }
+```
+
 ### `vaxis diagrams sessions list --json`
 ```json
 {
