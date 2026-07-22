@@ -566,9 +566,13 @@ Don't over-fragment: a genuinely small diagram (a handful of nodes with no real 
 
 ### Shape & color conventions
 
-You are the AI on the `--mermaid` path — there is no server-side styling pass behind you, so
-apply these yourself or your diagrams will render visibly plainer than ones made via
-`generate --prompt` (the server AI gets an equivalent set of rules). These are a **condensed
+Both the `--mermaid` and `--prompt` paths store Mermaid and render through the **same**
+server normalization and browser styling — palette coloring by subgraph, shape coercion,
+and ELK layout. The visual polish is *not* something only the server AI gets; the renderer
+applies it to your diagram too. What differs is the graph **structure** you author, and that
+structure is what the styling acts on: group nodes into subgraphs (that is what gets them
+colored), pick the right shapes, and build a hierarchy. Get the structure right and a
+`--mermaid` diagram renders on par with `generate --prompt`. These rules are a **condensed
 mirror** of `vaxis`'s own prompt rules (`S_FLOWCHART_SHAPES`, `S_COLOR`, `S_OUTPUT_FLOWCHART`,
 `S_DRILL` in `apps/api/src/prompts.ts`, and `STORAGE_KEYWORD_TOKENS` in
 `packages/scene-serializer/src/shapeRules.ts`) — see the STRONG RULE in this repo's
@@ -584,7 +588,10 @@ mirror** of `vaxis`'s own prompt rules (`S_FLOWCHART_SHAPES`, `S_COLOR`, `S_OUTP
 
 **Forbidden for new nodes** (won't render correctly in Vaxis): hexagon `{{"..."}}`, stadium `(["..."])`, circle `(("..."))`, Mermaid v11 `nodeId@{shape:...}`, or any "shape-name in parens" like `nodeId(rounded["..."])`. Exception: an *existing* node already using one of these — copy it through unchanged, don't reshape it.
 
-**Subgraphs, if you use them, MUST be individually colored** — an unstyled subgraph renders as a bare wireframe box:
+**Group related nodes into flat `subgraph` blocks — this is what produces the colored groups.**
+Vaxis's renderer assigns each subgraph a distinct color automatically, by its order among the
+subgraphs; a flat, ungrouped graph gets no group color, which is what makes a diagram look
+plain. The load-bearing act is the grouping itself, not a color directive.
 ```
 subgraph backendLayer["Backend"]
     api["API Gateway"]
@@ -592,9 +599,10 @@ subgraph backendLayer["Backend"]
 end
 style backendLayer fill:#FFF3E0,stroke:#BF360C,color:#BF360C
 ```
-Give each subgraph its own distinct soft fill + darker stroke (e.g. rotate through `#E1F5FE`,
-`#E8F5E9`, `#FFF3E0`, `#F3E5F5`, `#ECEFF1`) — never leave one unstyled while others are colored.
-Keep subgraphs flat (never nested).
+The `style <id> fill:...` line is **optional** — Vaxis's primary (v2) renderer overrides it
+with its own palette. Keep it only as harmless fallback for non-Vaxis Mermaid viewers and
+Vaxis's fallback render path; if you add one, give each subgraph a distinct soft fill (rotate
+`#E1F5FE`, `#E8F5E9`, `#FFF3E0`, `#F3E5F5`, `#ECEFF1`). Keep subgraphs flat (never nested).
 
 **Fan-out cap:** at most ~4 connections (in + out) per node. A node wired to 5+ peers renders
 as a tangled star — route the extras through the layer/bus that owns them instead of wiring
