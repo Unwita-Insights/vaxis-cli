@@ -395,13 +395,13 @@ being added for problems already solved by better graph authoring.
 
 ### Phase 0 — Baseline evaluation
 
-- [ ] Select 10–20 representative prompts covering architecture, pipelines, branching,
+- [x] Select 10–20 representative prompts covering architecture, pipelines, branching,
   named platforms, persistence, non-software domains, drills, edits, and direction.
-- [ ] Define expected semantic concepts and graph properties for every prompt.
+- [x] Define expected semantic concepts and graph properties for every prompt.
 - [ ] Capture current native `--prompt` results.
 - [ ] Capture current external-assistant `--mermaid` results.
 - [ ] Record model, prompt/rules version, viewport, and theme for each run.
-- [ ] Implement structural metrics for nodes, edges, subgraphs, fan-out, shapes, and drills.
+- [x] Implement structural metrics for nodes, edges, subgraphs, fan-out, shapes, and drills.
 - [ ] Implement render-health checks for conversion, overlap, clipping, aspect ratio, and
   subgraph containment.
 - [ ] Define a semantic-coverage rubric.
