@@ -143,6 +143,13 @@ vaxis diagrams delete --app-id <appId> --force
 # Get full Mermaid format reference (diagram types, syntax rules, limits)
 vaxis diagrams format --json
 
+# Compare the embedded authoring rules with the connected Vaxis server
+vaxis diagrams rules-check --json
+
+# Evaluate recorded prompt/direct Mermaid captures offline against the parity catalog
+vaxis diagrams evaluate --captures <captures.json> --json
+vaxis diagrams evaluate --captures <captures.json> --output <report.json> --json
+
 # Save raw user-provided Mermaid directly (no AI call)
 # Use when the user pastes Mermaid from another tool or provides it directly
 vaxis diagrams import <diagramId> --mermaid "graph TD\n    A[User] --> B[API]" --json
@@ -873,6 +880,56 @@ The `--mermaid` path never routes to Ask.
 }
 ```
 Full response includes all 5 editable types (flowchart, sequence, class, er, state) and the complete `image_fallback_types` list — see `format_cmd` in `src/commands/diagrams.rs` for the authoritative shape.
+
+### `vaxis diagrams rules-check --json`
+```json
+{
+  "ok": true,
+  "cli_version": "1.0.0",
+  "server_version": "1.0.0",
+  "drift": []
+}
+```
+This command requires authentication and exits with status `2` when the contracts are
+reachable but incompatible. Network, authentication, and response errors use status `1`.
+
+### `vaxis diagrams evaluate --captures <captures.json> --json`
+```json
+{
+  "report_version": "1.0.0",
+  "summary": {
+    "total_captures": 2,
+    "passed_captures": 1,
+    "failed_captures": 1,
+    "missing_case_ids": []
+  },
+  "results": [
+    {
+      "case_id": "strict-step-chain",
+      "path": "mermaid",
+      "model": "example-model",
+      "rules_version": "1.0.0",
+      "captured_at": "2026-07-22T00:00:00Z",
+      "viewport": { "width": 1440, "height": 900 },
+      "theme": "light",
+      "metrics": {
+        "direction": "LR",
+        "node_count": 4,
+        "edge_count": 3,
+        "subgraph_count": 0,
+        "max_connections": 2,
+        "cylinder_count": 0,
+        "rhombus_count": 0,
+        "drill_count": 0
+      },
+      "failures": []
+    }
+  ]
+}
+```
+Evaluation is offline and always emits the report as JSON unless `--output` writes it to a
+file. It exits with status `2` when deterministic expectations fail and status `1` for invalid
+input or file errors.
 
 ### `vaxis diagrams undo --json`
 ```json
