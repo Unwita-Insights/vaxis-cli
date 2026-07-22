@@ -860,20 +860,33 @@ async fn ask(token: &str, id: &str, prompt: &str, session: Option<&str>, json: b
         return;
     }
 
-    // `answer` is the prose reply; some no-op turns use `notice` instead. Ask
-    // forces intent "ask", so the server should always answer in prose — if it
-    // returned neither, say so plainly rather than printing a bare placeholder.
-    match result["answer"].as_str().or_else(|| result["notice"].as_str()) {
-        Some(text) => {
-            println!();
-            for line in text.lines() {
-                println!("  {}", line);
-            }
+    // Surface the reply in priority order:
+    //   1. `answer`  — the prose reply (the normal case).
+    //   2. `notice`  — a no-op explanation when there's no answer.
+    //   3. `mode_mismatch` — the question actually read like an edit; show the
+    //      server's guidance (and suggested intent) instead of a misleading
+    //      "no answer".
+    //   4. bare fallback — the server truly returned nothing.
+    if let Some(text) = result["answer"].as_str().or_else(|| result["notice"].as_str()) {
+        println!("\n{}", "Answer".bold());
+        for line in text.lines() {
+            println!("  {}", line);
         }
-        None => {
-            eprintln!("{} The server returned no answer for this question.", "⚠".yellow());
-            std::process::exit(1);
+    } else if let Some(mm) = result.get("mode_mismatch").filter(|v| !v.is_null()) {
+        let msg = mm["message"].as_str().unwrap_or("That reads like an edit, not a question.");
+        eprintln!("{} {}", "⚠".yellow(), msg);
+        if let Some(intent) = mm["suggested_intent"].as_str() {
+            eprintln!(
+                "  {} vaxis diagrams generate {} --prompt \"<prompt>\" --intent {}",
+                "Try:".dimmed(),
+                id,
+                intent
+            );
         }
+        std::process::exit(1);
+    } else {
+        eprintln!("{} The server returned no answer for this question.", "⚠".yellow());
+        std::process::exit(1);
     }
 }
 

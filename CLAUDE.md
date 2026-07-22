@@ -134,7 +134,8 @@ Endpoints the CLI is coupled to (backend's CURRENT paths):
   call, so `diagrams share` reads via `GET` first and only `POST`s when unshared),
   `POST /api/diagrams/{id}/generate`
   (request may send `prompt` + `intent` + `chat_session_id`, or `mermaid` for the direct
-  path; `intent:"ask"` powers `diagrams ask` and returns an `answer` field),
+  path; `intent:"ask"` powers `diagrams ask` and may return `answer`, `notice`, or
+  `mode_mismatch` with `message` and `suggested_intent` subfields),
   `POST /api/diagrams/{id}/children`, `POST /api/diagrams/{id}/import`,
   `GET /api/diagrams/{id}/tree`, `GET /api/diagrams/{id}/chat`,
   `GET|POST /api/diagrams/{id}/chat/sessions` (sessions list/create),
