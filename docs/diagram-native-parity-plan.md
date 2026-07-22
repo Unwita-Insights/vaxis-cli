@@ -402,7 +402,7 @@ being added for problems already solved by better graph authoring.
 - [ ] Capture current external-assistant `--mermaid` results.
 - [ ] Record model, prompt/rules version, viewport, and theme for each run.
 - [x] Implement structural metrics for nodes, edges, subgraphs, fan-out, shapes, and drills.
-- [ ] Implement render-health checks for conversion, overlap, clipping, aspect ratio, and
+- [x] Implement render-health checks for conversion, overlap, clipping, aspect ratio, and
   subgraph containment.
 - [x] Define a semantic-coverage rubric.
 - [ ] Define a visual-quality rubric and save fixed-viewport screenshots.
@@ -457,7 +457,7 @@ being added for problems already solved by better graph authoring.
 
 ### Phase 5 — Regression and completion
 
-- [x] Run deterministic structural checks in CI; add render-health checks with the web renderer.
+- [x] Run deterministic structural and render-health checks in CI.
 - [ ] Schedule model-based comparisons before prompt or model upgrades.
 - [ ] Store representative screenshot pairs for visual regression review.
 - [ ] Confirm there is no parse/render reliability regression.
