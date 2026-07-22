@@ -143,6 +143,13 @@ vaxis diagrams delete --app-id <appId> --force
 # Get full Mermaid format reference (diagram types, syntax rules, limits)
 vaxis diagrams format --json
 
+# Compare the embedded authoring rules with the connected Vaxis server
+vaxis diagrams rules-check --json
+
+# Evaluate recorded prompt/direct Mermaid captures offline against the parity catalog
+vaxis diagrams evaluate --captures <captures.json> --json
+vaxis diagrams evaluate --captures <captures.json> --output <report.json> --json
+
 # Save raw user-provided Mermaid directly (no AI call)
 # Use when the user pastes Mermaid from another tool or provides it directly
 vaxis diagrams import <diagramId> --mermaid "graph TD\n    A[User] --> B[API]" --json
@@ -552,11 +559,16 @@ graph TD
 flowchart TB
     login[Login]
     tokenMgr[Token Manager]
-    login --> tokenMgr
+    sessionStore[(Session Store)]
+    login --> tokenMgr --> sessionStore
 ```
 
 A seeded child contains ONLY that node's new internals — never repeat a parent node ID
 inside it, and drill blocks are one level deep (a child may not contain its own markers).
+When you seed a child, give it **at least 3 real, meaningfully named nodes** connected by
+useful edges. The server drops non-empty seeded drills below this floor. This minimum does
+not apply to a bare marker: a bare `%% vaxis:drill <nodeId>` intentionally creates an empty
+child to fill later and must remain supported.
 The CLI auto-creates a child diagram for every marker after `generate` returns. **Drill
 blocks work on flowcharts only** — never add them to sequence / class / er / state or any
 image-fallback diagram.
@@ -596,6 +608,8 @@ Don't over-fragment: a genuinely small diagram (a handful of nodes with no real 
 
 ### Shape & color conventions
 
+<!-- vaxis-authoring-rules: 1.0.0 -->
+
 Both the `--mermaid` and `--prompt` paths store Mermaid and render through the **same**
 server normalization and browser styling — palette coloring by subgraph, shape coercion,
 and ELK layout. The visual polish is *not* something only the server AI gets; the renderer
@@ -608,6 +622,27 @@ mirror** of `vaxis`'s own prompt rules (`S_FLOWCHART_SHAPES`, `S_COLOR`, `S_OUTP
 `packages/scene-serializer/src/shapeRules.ts`) — see the STRONG RULE in this repo's
 `CLAUDE.md` if that source ever needs re-checking for drift.
 
+**Match richness to intent:** a bare-object request gets only that object; do not pad it
+with invented neighbors. An integration or implementation request for a named real-world
+tool must show its real relevant capabilities and connections rather than one generic box
+(for example, Supabase can expand to Postgres, Auth, Storage, Realtime, Edge Functions,
+and APIs; Stripe can expand to Checkout, Webhooks, Billing, and customers). A broad design
+request gets a coherent multi-component architecture. If you do not know a named tool,
+model only the role the user described rather than inventing internals.
+
+**Use domain-appropriate vocabulary:** classify the diagram as SOFTWARE or NON-SOFTWARE
+from the request and surrounding diagram. Software diagrams may use terms such as Service,
+API, Database, Queue, and Gateway. In non-software diagrams, use the natural concept name
+and do not invent software suffixes such as Module, Service, Database, DB, Store, Manager,
+Handler, Engine, Tracker, Analyzer, Identifier, Processor, System, Gateway, or API. For
+example, prefer `Habitat`, `Migration`, and `Threat` over `Habitat Module`, `Migration
+Tracker`, and `Threat Engine`.
+
+**Choose direction from structure:** use `flowchart LR` for a genuine sequence—pipeline,
+process, lifecycle, journey, or step-by-step chain—and `flowchart TB` for layered
+architectures and hierarchies. An explicit user direction always wins. When editing,
+preserve the existing direction unless the user explicitly asks to change it.
+
 **Shape mapping (flowcharts, software diagrams) — not optional, self-check before returning:**
 
 | Shape | Syntax | When |
@@ -615,6 +650,11 @@ mirror** of `vaxis`'s own prompt rules (`S_FLOWCHART_SHAPES`, `S_COLOR`, `S_OUTP
 | Rectangle | `nodeId["Label"]` | Default — services, APIs, gateways, UIs, load balancers. Even "gateway" stays a rectangle — diamonds squeeze text. |
 | Cylinder | `nodeId[("Label")]` | **Required** whenever the label contains a storage word (case-insensitive, whole-word match): `db`, `database`, `store`, `storage`, `cache`, `queue`, `bucket`, `table`, `log`, `index`, `vector store`, `blob`, `s3`, `redis`, `postgres(ql)`, `mongo(db)`, `mysql`, `sqlite`, `kafka`, `sqs`, `d1`, `kv`, `r2`, `sql`, `nosql`, `dynamodb`, `firestore`, `memcached`, `elasticsearch`, `gcs`. |
 | Rhombus | `nodeId{"Label?"}` | **Required** only when the label is a genuine yes/no branch (ends in `?`) — `authCheck{"Authenticated?"}`. Never for a service name. |
+
+Before returning a flowchart, self-check it: every storage-token label uses a cylinder;
+every label ending in `?` uses a rhombus; a software diagram that mentions persistence has
+at least one cylinder; and a flow with genuine branching has at least one rhombus. Fix the
+Mermaid before sending it when any check fails.
 
 **Forbidden for new nodes** (won't render correctly in Vaxis): hexagon `{{"..."}}`, stadium `(["..."])`, circle `(("..."))`, Mermaid v11 `nodeId@{shape:...}`, or any "shape-name in parens" like `nodeId(rounded["..."])`. Exception: an *existing* node already using one of these — copy it through unchanged, don't reshape it.
 
@@ -637,6 +677,11 @@ Vaxis's fallback render path; if you add one, give each subgraph a distinct soft
 **Fan-out cap:** at most ~4 connections (in + out) per node. A node wired to 5+ peers renders
 as a tangled star — route the extras through the layer/bus that owns them instead of wiring
 everything directly to one hub.
+
+Keep flowcharts close to a **layered DAG**: arrange clear tiers such as entry/UI → core
+services → data/infra and let edges flow primarily in one direction. Avoid a mesh of
+cross-cutting connections. Connect a shared utility from the layer that owns it, or relay
+fan-out through a gateway, bus, or queue, instead of connecting every component directly.
 
 **Drill by default at scale:** a fresh SOFTWARE system with **4 or more composite services**
 gets a drill block per composite service as the default posture, not an exception — this
@@ -800,6 +845,7 @@ The `--mermaid` path never routes to Ask.
 ### `vaxis diagrams format --json`
 ```json
 {
+  "schema_version": "1.0.0",
   "editable_types": [
     {
       "type": "flowchart",
@@ -816,11 +862,74 @@ The `--mermaid` path never routes to Ask.
   "drill_description": "FLOWCHART ONLY. Do NOT use drill blocks with sequence/class/er/state or any image-fallback type.",
   "preserve_type_on_edit": "When editing an existing diagram, keep its current type unless the user explicitly asks to convert it.",
   "node_id_rules": ["alphanumeric and underscores only", "no spaces"],
-  "limits": { "max_nodes_per_diagram": 50, "max_edges_per_diagram": 60 },
+  "limits": {
+    "max_nodes_per_diagram": 50,
+    "max_edges_per_diagram": 60,
+    "max_connections_per_node": 4,
+    "min_seeded_drill_nodes": 3
+  },
+  "authoring_contract": {
+    "richness": { "integration": "Expand named real-world tools into relevant real capabilities and connections." },
+    "domain": { "non_software": "Use natural domain concepts; do not invent software component suffixes." },
+    "shapes": { "storage": "cylinder", "decision": "rhombus", "storage_keywords": ["db", "database", "..."] },
+    "topology": { "preferred": "layered DAG" },
+    "direction": { "LR": "Pipelines and strict step chains.", "TB": "Layered architectures and hierarchies." },
+    "drills": { "bare_marker": "Valid and creates an empty child.", "seeded_min_nodes": 3 }
+  },
   "best_practices": ["flowchart TB for architecture", "flowchart LR for pipelines"]
 }
 ```
 Full response includes all 5 editable types (flowchart, sequence, class, er, state) and the complete `image_fallback_types` list — see `format_cmd` in `src/commands/diagrams.rs` for the authoritative shape.
+
+### `vaxis diagrams rules-check --json`
+```json
+{
+  "ok": true,
+  "cli_version": "1.0.0",
+  "server_version": "1.0.0",
+  "drift": []
+}
+```
+This command requires authentication and exits with status `2` when the contracts are
+reachable but incompatible. Network, authentication, and response errors use status `1`.
+
+### `vaxis diagrams evaluate --captures <captures.json> --json`
+```json
+{
+  "report_version": "1.0.0",
+  "summary": {
+    "total_captures": 2,
+    "passed_captures": 1,
+    "failed_captures": 1,
+    "missing_case_ids": []
+  },
+  "results": [
+    {
+      "case_id": "strict-step-chain",
+      "path": "mermaid",
+      "model": "example-model",
+      "rules_version": "1.0.0",
+      "captured_at": "2026-07-22T00:00:00Z",
+      "viewport": { "width": 1440, "height": 900 },
+      "theme": "light",
+      "metrics": {
+        "direction": "LR",
+        "node_count": 4,
+        "edge_count": 3,
+        "subgraph_count": 0,
+        "max_connections": 2,
+        "cylinder_count": 0,
+        "rhombus_count": 0,
+        "drill_count": 0
+      },
+      "failures": []
+    }
+  ]
+}
+```
+Evaluation is offline and always emits the report as JSON unless `--output` writes it to a
+file. It exits with status `2` when deterministic expectations fail and status `1` for invalid
+input or file errors.
 
 ### `vaxis diagrams undo --json`
 ```json

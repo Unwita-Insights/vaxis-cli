@@ -1,0 +1,22 @@
+[
+  {
+    "case_id": "small-password-reset",
+    "path": "mermaid",
+    "mermaid": "flowchart LR\n  request[Reset Request] --> email[Email]\n  email --> password[New Password]\n  password --> success[Success]",
+    "model": "fixture",
+    "rules_version": "1.0.0",
+    "captured_at": "2026-07-22T00:00:00Z",
+    "viewport": { "width": 1440, "height": 900 },
+    "theme": "light"
+  },
+  {
+    "case_id": "branching-loan-approval",
+    "path": "prompt",
+    "mermaid": "flowchart TB\n  apply[Application] --> identity[Identity Check]\n  identity --> credit[Credit Assessment]\n  credit --> approved{Approved?}\n  approved -->|yes| funding[Funding]\n  approved -->|review| manual[Manual Review]\n  manual --> rejected[Rejection]",
+    "model": "fixture",
+    "rules_version": "1.0.0",
+    "captured_at": "2026-07-22T00:00:00Z",
+    "viewport": { "width": 1440, "height": 900 },
+    "theme": "light"
+  }
+]

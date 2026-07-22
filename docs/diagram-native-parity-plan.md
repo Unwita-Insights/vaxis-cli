@@ -10,6 +10,15 @@ Repos involved:
 - `vaxis-cli`: CLI, local format reference, preflight lint, and `skills/SKILL.md`
 - `vaxis`: API generation pipeline, native prompt, browser renderer, and scene serializer
 
+Implementation PRs:
+
+- `vaxis-cli` [#18](https://github.com/Unwita-Insights/vaxis-cli/pull/18)
+- `vaxis` [#353](https://github.com/Unwita-Insights/vaxis/pull/353)
+
+**Status reviewed:** 2026-07-22. Engineering phases 1–4 are substantially implemented;
+Item 7 remains open until the Phase 0 captures, screenshot evidence, and measured
+before/after results complete the acceptance criteria.
+
 The native prompt is defined in `vaxis/apps/api/src/prompts.ts`.
 
 ---
@@ -93,21 +102,20 @@ most fallback compatibility for non-V2 rendering. The current `SKILL.md` explana
 that direct Mermaid has “no server-side styling pass” is factually incorrect and must be
 rewritten.
 
-### Direction handling is not shared
+### Direction handling is now context-aware on both paths
 
-Native generation calls `applyFlowchartDirection` after processing Mermaid. Direct
-Mermaid currently does not.
+Native generation and direct Mermaid both use `applyFlowchartDirection`, but direct
+Mermaid remains backward compatible. PRs #18 and #353 added optional
+`direction_context` containing:
 
-However, this cannot be copied blindly. Native direction selection uses context that
-`generateFromMermaid` does not currently receive:
+- `policy`: `preserve` (default) or `auto`.
+- `explicit`: `LR` or `TB`; an explicit value always wins.
+- `is_fresh_generation`: auto-direction is never applied to edits.
+- `viewport`: auto-direction requires a known landscape viewport.
 
-- Whether the user explicitly requested LR or TB.
-- Whether the operation is a fresh generation or an edit.
-- Whether the viewport is portrait or landscape.
-
-Calling the helper with `explicit: null, auto: true` would auto-flip some edits and
-portrait-canvas diagrams that native generation intentionally preserves. Direction parity
-therefore requires either explicit metadata or a deliberately narrower rule.
+Requests that omit this context keep their authored Mermaid direction unchanged. This
+prevents silent rewrites for old clients, edits, portrait canvases, and headless callers
+whose viewport is unknown.
 
 ---
 
@@ -151,7 +159,7 @@ and would defeat the quota-free purpose of `--mermaid`.
 - Drill marker placement and node-ID rules
 - Preserve-on-edit behavior
 
-### Missing or weak
+### Added by PR #18
 
 1. `S_RICHNESS`: expand named platforms and match detail to user intent.
 2. `S_DOMAIN`: use domain-specific language outside software architecture.
@@ -162,6 +170,8 @@ and would defeat the quota-free purpose of `--mermaid`.
 6. Seeded drill substance: aim for at least three meaningful nodes without invalidating
    bare markers.
 7. Correct explanation of shared processing and V2 palette behavior.
+
+These rules are now mirrored in the embedded authoring contract and guarded by CLI tests.
 
 ---
 
@@ -220,28 +230,28 @@ Measure four categories:
 Structural checks alone cannot prove visual parity. A graph may contain the correct number
 of subgraphs and shapes while still having poor layout or missing the user's intent.
 
-### Phase 1 — Complete `SKILL.md` prompt parity
+### Phase 1 — Complete `SKILL.md` prompt parity (implemented)
 
-Add the seven missing or weak rules above, starting with richness and domain vocabulary.
-Rewrite the shape/color introduction to state:
+PR #18 added the seven previously missing or weak rules and rewrote the shape/color
+introduction to state:
 
 - Shared server normalization provides a limited safety net.
 - V2 rendering supplies the final visual style for both paths.
 - The assistant controls the graph structure that makes that styling effective.
 - Subgraph membership matters more than explicit fill directives under V2.
 
-Keep fallback `style` examples only if older/non-V2 rendering still needs them, and label
-that purpose accurately.
+Fallback `style` examples are retained only for older/non-V2 compatibility and are labeled
+accordingly.
 
 Run the Phase 0 evaluation before and after this change. Do not assign a numerical impact
 estimate until the results support one.
 
-### Phase 2 — Expand the authoritative local format contract
+### Phase 2 — Expand the authoritative local format contract (implemented)
 
-`vaxis diagrams format --json` already exists, but it is a static local CLI response—not
-a server endpoint—and currently exposes only a compact Mermaid format reference.
+`vaxis diagrams format --json` remains an offline CLI response and now exposes a
+versioned Mermaid authoring contract.
 
-Expand it with machine-readable fields for:
+The contract includes machine-readable fields for:
 
 - Rules schema/version
 - Richness rules
@@ -252,38 +262,38 @@ Expand it with machine-readable fields for:
 - Drill selection and seeded-child substance
 - Preservation rules
 
-Avoid maintaining independent prose copies in `format_cmd` and `SKILL.md`. Prefer a
-versioned JSON or Rust data artifact from which the command output and relevant skill
-reference can be generated or tested.
+The versioned JSON artifact is embedded by the CLI, and tests validate its version and
+required skill content to reduce independent prose drift.
 
 ### Phase 3 — Add only proven deterministic server improvements
 
 Use Phase 0 results to decide which remaining gaps can be fixed safely without an LLM.
 
-#### Direction
+#### Direction — implemented
 
-Do not call `applyFlowchartDirection` unconditionally in `generateFromMermaid`.
-
-Preferred design: allow direct-Mermaid requests to include optional context such as:
+Direct-Mermaid requests now accept optional context:
 
 ```json
 {
   "mermaid": "...",
-  "direction_policy": "preserve|auto",
-  "explicit_direction": "LR|TB|null",
-  "is_fresh_generation": true,
-  "viewport": { "width": 1440, "height": 900 }
+  "direction_context": {
+    "policy": "preserve|auto",
+    "explicit": "LR|TB",
+    "is_fresh_generation": true,
+    "viewport": { "width": 1440, "height": 900 }
+  }
 }
 ```
 
-Defaults must preserve existing behavior. The CLI/assistant can usually author the correct
-header directly, so server auto-direction should be an opt-in safety net rather than a
-silent rewrite without context.
+The default preserves existing behavior. Server auto-direction is an opt-in safety net,
+not a silent rewrite. The CLI exposes matching flags and omits `direction_context`
+entirely when none are supplied, preserving the legacy request body.
 
-#### Thin seeded drills
+#### Thin seeded drills — implemented as measurement and warning
 
-Measure and warn before filtering. A small seeded child may be legitimate, and bare
-markers intentionally create empty children. If filtering is later justified:
+The CLI measures and warns before sending a non-empty seed below the three-node substance
+floor. It does not silently filter content because a concise child may be legitimate, and
+bare markers intentionally create empty children. Any future enforcement must:
 
 - Never drop bare markers.
 - Apply the floor only to non-empty seeded Mermaid.
@@ -292,22 +302,20 @@ markers intentionally create empty children. If filtering is later justified:
 
 ### Phase 4 — Eliminate cross-repository rule drift
 
-Once the local schema is stable, choose one authoritative distribution mechanism:
+The authoritative contract is now exported by `vaxis` from
+`packages/scene-serializer/src/diagramAuthoringRules.ts` and served through the
+authenticated `GET /api/diagrams/rules` endpoint. The CLI keeps an embedded, versioned
+offline contract for `diagrams format --json` and compares it with the server through
+`vaxis diagrams rules-check --json`.
 
-1. A versioned server rules endpoint consumed by assistants/CLI, or
-2. A versioned rules artifact published from `vaxis` and vendored/generated into
-   `vaxis-cli` with a drift test.
+`rules-check` returns status `0` for a compatible contract, `1` for operational errors,
+and `2` for successfully fetched but incompatible contracts. The remaining Phase 4 task
+is to run this comparison in a configured cross-repository CI/release environment; unit
+tests already cover the high-value schema, storage-keyword, and seeded-drill comparisons.
 
-A single shared source-code module is not the natural choice because the repos use
-different languages and release independently. A versioned data contract is easier to
-consume, cache, compare, and test.
+### Phase 5 — Turn the evaluation into a regression suite (partially implemented)
 
-The CLI should expose the rules version in `diagrams format --json`. CI should fail when a
-mirrored skill contract claims an older incompatible version.
-
-### Phase 5 — Turn the evaluation into a regression suite
-
-- Run deterministic structural and render-health checks in CI.
+- Deterministic structural and render-health checks now run in the repositories' CI tests.
 - Run model comparisons periodically or before prompt/model upgrades.
 - Pin model versions when reproducibility matters and record them with results.
 - Store representative screenshot pairs and review substantial visual changes.
@@ -377,8 +385,12 @@ being added for problems already solved by better graph authoring.
   `generateFromMermaid`, `processMermaidForType`, and native direction call
 - `apps/api/src/utils/mermaid.ts`: `applyFlowchartDirection`, `injectSpacing`,
   `normalizeShapes`, and `fixLeakedNodeIds`
+- `apps/api/src/model/diagram/diagram_generate.ts`: direct-Mermaid direction-context schema
+- `apps/api/src/controller/diagram/diagram_controller.ts`: authenticated rules endpoint
+- `packages/scene-serializer/src/diagramAuthoringRules.ts`: canonical authoring contract
 - `apps/web/src/lib/mermaid/v2/mermaidToSceneV2.ts`: palette assignment, V2 styling,
   and ELK pipeline
+- `apps/web/src/lib/mermaid/v2/sceneHealth.ts`: deterministic renderer health metrics
 - `apps/web/src/lib/mermaid/mermaidToScene.ts`: shape coercion and fallback subgraph style
   handling
 
@@ -386,6 +398,8 @@ being added for problems already solved by better graph authoring.
 
 - `skills/SKILL.md`: external-assistant authoring rules
 - `src/commands/diagrams.rs`: direct generation request and static `format_cmd`
+- `src/diagram_format.json`: embedded offline authoring contract
+- `src/parity_eval.rs`: deterministic capture evaluation and versioned reports
 - `src/mermaid_lint.rs`: direct-Mermaid preflight lint
 - `docs/reliability-checklist.md`: Item 7 tracking
 
@@ -395,69 +409,70 @@ being added for problems already solved by better graph authoring.
 
 ### Phase 0 — Baseline evaluation
 
-- [ ] Select 10–20 representative prompts covering architecture, pipelines, branching,
+- [x] Select 10–20 representative prompts covering architecture, pipelines, branching,
   named platforms, persistence, non-software domains, drills, edits, and direction.
-- [ ] Define expected semantic concepts and graph properties for every prompt.
+- [x] Define expected semantic concepts and graph properties for every prompt.
 - [ ] Capture current native `--prompt` results.
 - [ ] Capture current external-assistant `--mermaid` results.
 - [ ] Record model, prompt/rules version, viewport, and theme for each run.
-- [ ] Implement structural metrics for nodes, edges, subgraphs, fan-out, shapes, and drills.
-- [ ] Implement render-health checks for conversion, overlap, clipping, aspect ratio, and
+- [x] Implement structural metrics for nodes, edges, subgraphs, fan-out, shapes, and drills.
+- [x] Implement render-health checks for conversion, overlap, clipping, aspect ratio, and
   subgraph containment.
-- [ ] Define a semantic-coverage rubric.
-- [ ] Define a visual-quality rubric and save fixed-viewport screenshots.
+- [x] Define a semantic-coverage rubric.
+- [x] Define a visual-quality rubric.
+- [ ] Save fixed-viewport screenshot pairs for both generation paths.
 - [ ] Publish the baseline results before changing authoring rules.
 
 ### Phase 1 — `SKILL.md` parity
 
-- [ ] Add richness rules based on `S_RICHNESS`.
-- [ ] Add domain-vocabulary rules based on `S_DOMAIN`.
-- [ ] Add the persistence-cylinder and genuine-branch self-check.
-- [ ] Add layered-DAG and anti-hub-and-spoke guidance.
-- [ ] Strengthen LR pipeline versus TB architecture guidance.
-- [ ] Add seeded-drill substance guidance without rejecting bare markers.
+- [x] Add richness rules based on `S_RICHNESS`.
+- [x] Add domain-vocabulary rules based on `S_DOMAIN`.
+- [x] Add the persistence-cylinder and genuine-branch self-check.
+- [x] Add layered-DAG and anti-hub-and-spoke guidance.
+- [x] Strengthen LR pipeline versus TB architecture guidance.
+- [x] Add seeded-drill substance guidance without rejecting bare markers.
 - [x] Replace the inaccurate “no server-side styling pass” explanation. *(PR #15)*
 - [x] Explain that V2 palette assignment depends on subgraph membership. *(PR #15)*
 - [x] Label explicit Mermaid colors as fallback compatibility if they are retained. *(PR #15)*
-- [ ] Run Mermaid lint/regression tests for every skill example.
+- [x] Run Mermaid lint/regression tests for every skill example.
 - [ ] Re-run the baseline and document the measured change.
 
 ### Phase 2 — Authoritative format contract
 
-- [ ] Design a versioned machine-readable rules schema.
-- [ ] Add richness, domain, shape, grouping, topology, direction, drill, and preservation
+- [x] Design a versioned machine-readable rules schema.
+- [x] Add richness, domain, shape, grouping, topology, direction, drill, and preservation
   rules to the schema.
-- [ ] Include the authoritative storage-keyword list.
-- [ ] Expose the rules version through `vaxis diagrams format --json`.
-- [ ] Generate or validate duplicated `SKILL.md` content against the schema.
-- [ ] Add snapshot tests for the JSON contract.
-- [ ] Document compatibility rules for future schema versions.
+- [x] Include the authoritative storage-keyword list.
+- [x] Expose the rules version through `vaxis diagrams format --json`.
+- [x] Generate or validate duplicated `SKILL.md` content against the schema.
+- [x] Add snapshot tests for the JSON contract.
+- [x] Document compatibility rules for future schema versions.
 
 ### Phase 3 — Deterministic improvements
 
 - [ ] Review baseline failures that remain after the prompt-parity work.
-- [ ] Specify direct-Mermaid direction metadata and backward-compatible defaults.
-- [ ] Preserve direction by default when the required context is unavailable.
-- [ ] Add opt-in auto-direction only if evaluation results justify it.
-- [ ] Add direction tests for fresh generation, edits, explicit LR/TB, and portrait
+- [x] Specify direct-Mermaid direction metadata and backward-compatible defaults.
+- [x] Preserve direction by default when the required context is unavailable.
+- [x] Add opt-in auto-direction behind explicit request context.
+- [x] Add direction tests for fresh generation, edits, explicit LR/TB, and portrait
   viewports.
-- [ ] Measure thin seeded drills before introducing enforcement.
-- [ ] Prefer warning metadata to silent seeded-drill deletion.
-- [ ] Verify that bare drill markers continue to create empty children.
-- [ ] Add regression tests for concise but valid seeded children.
+- [x] Measure thin seeded drills before introducing enforcement.
+- [x] Prefer warning metadata to silent seeded-drill deletion.
+- [x] Verify that bare drill markers continue to create empty children.
+- [x] Add regression tests for concise but valid seeded children.
 
 ### Phase 4 — Drift prevention
 
-- [ ] Choose a versioned server endpoint or published rules artifact as the authoritative
+- [x] Choose a versioned server endpoint and published rules artifact as the authoritative
   cross-repository source.
-- [ ] Add rules-version comparison between `vaxis` and `vaxis-cli`.
+- [x] Add rules-version comparison between `vaxis` and `vaxis-cli`.
 - [ ] Fail CI when mirrored rules are incompatible or stale.
-- [ ] Define offline/cache behavior if the CLI consumes server-owned rules.
-- [ ] Document the rule-update and release process for both repositories.
+- [x] Define offline/cache behavior if the CLI consumes server-owned rules.
+- [x] Document the rule-update and release process for both repositories.
 
 ### Phase 5 — Regression and completion
 
-- [ ] Run deterministic structural and render-health checks in CI.
+- [x] Run deterministic structural and render-health checks in CI.
 - [ ] Schedule model-based comparisons before prompt or model upgrades.
 - [ ] Store representative screenshot pairs for visual regression review.
 - [ ] Confirm there is no parse/render reliability regression.

@@ -1,6 +1,6 @@
 [package]
 name = "vaxis"
-version = "0.2.6"
+version = "0.3.0"
 edition = "2021"
 
 [[bin]]
@@ -18,3 +18,4 @@ open      = "5"
 colored   = "2"
 dirs      = "5"
 dialoguer = "0.11"
+regex     = "1"

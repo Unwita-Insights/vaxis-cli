@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "vaxis")]
@@ -37,6 +38,36 @@ impl Intent {
             Intent::Detail => "detail",
             Intent::Simplify => "simplify",
             Intent::Ask => "ask",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum DirectDirectionPolicy {
+    Preserve,
+    Auto,
+}
+
+impl DirectDirectionPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Preserve => "preserve",
+            Self::Auto => "auto",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum FlowDirection {
+    Lr,
+    Tb,
+}
+
+impl FlowDirection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Lr => "LR",
+            Self::Tb => "TB",
         }
     }
 }
@@ -190,6 +221,26 @@ pub enum DiagramsAction {
         /// Target an existing AI chat session (see `diagrams sessions`)
         #[arg(short, long)]
         session: Option<String>,
+
+        /// Direct Mermaid direction policy; preserve is the backward-compatible default
+        #[arg(long, value_enum, requires = "mermaid")]
+        direction_policy: Option<DirectDirectionPolicy>,
+
+        /// Force LR or TB on direct Mermaid
+        #[arg(long, value_enum, requires = "mermaid")]
+        explicit_direction: Option<FlowDirection>,
+
+        /// Mark direct Mermaid as a fresh generation eligible for opt-in auto direction
+        #[arg(long, requires = "mermaid")]
+        fresh_generation: bool,
+
+        /// Canvas width for direction decisions (requires --viewport-height)
+        #[arg(long, requires_all = ["mermaid", "viewport_height"])]
+        viewport_width: Option<u32>,
+
+        /// Canvas height for direction decisions (requires --viewport-width)
+        #[arg(long, requires_all = ["mermaid", "viewport_width"])]
+        viewport_height: Option<u32>,
     },
 
     /// Ask a question about a diagram — server AI answers in prose, no edit
@@ -269,6 +320,20 @@ pub enum DiagramsAction {
 
     /// Return Mermaid format reference — diagram types, syntax rules, limits
     Format,
+
+    /// Compare the embedded authoring contract with the connected Vaxis server
+    RulesCheck,
+
+    /// Evaluate recorded native/direct Mermaid outputs against the parity catalog
+    Evaluate {
+        /// JSON file containing recorded outputs for one or more eval cases
+        #[arg(long)]
+        captures: PathBuf,
+
+        /// Write the JSON report to this path instead of stdout
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 
     /// Save raw Mermaid to a diagram directly, bypassing AI
     Import {

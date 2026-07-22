@@ -132,9 +132,13 @@ Endpoints the CLI is coupled to (backend's CURRENT paths):
   model; returns `{token, edit_token}` and the CLI builds `/view/{token}` +
   `/collab/{edit_token}`. `POST` is create-OR-**ROTATE**: it mints a new token pair every
   call, so `diagrams share` reads via `GET` first and only `POST`s when unshared),
+  `GET /api/diagrams/rules` (authenticated canonical diagram-authoring contract used by
+  `diagrams rules-check` to detect cross-repository rule drift),
   `POST /api/diagrams/{id}/generate`
   (request may send `prompt` + `intent` + `chat_session_id`, or `mermaid` for the direct
-  path; `intent:"ask"` powers `diagrams ask` and returns an `answer` field),
+  path; direct Mermaid requests may also include optional `direction_context` with
+  `policy`, `explicit`, `is_fresh_generation`, and `viewport`; `intent:"ask"` powers
+  `diagrams ask` and returns an `answer` field),
   `POST /api/diagrams/{id}/children`, `POST /api/diagrams/{id}/import`,
   `GET /api/diagrams/{id}/tree`, `GET /api/diagrams/{id}/chat`,
   `GET|POST /api/diagrams/{id}/chat/sessions` (sessions list/create),

@@ -100,9 +100,16 @@ fn ensure_generation_mode(json: bool) {
 pub async fn run(action: DiagramsAction, json: bool) {
     // `format` is a static reference — no auth or network needed. Handle it
     // before the auth gate so a syntax lookup works even when logged out.
-    if matches!(action, DiagramsAction::Format) {
-        format_cmd(json);
-        return;
+    match &action {
+        DiagramsAction::Format => {
+            format_cmd(json);
+            return;
+        }
+        DiagramsAction::Evaluate { captures, output } => {
+            evaluate_cmd(captures, output.as_deref());
+            return;
+        }
+        _ => {}
     }
 
     let token = match auth_token() {
@@ -120,7 +127,18 @@ pub async fn run(action: DiagramsAction, json: bool) {
     match action {
         DiagramsAction::List { app_id }           => list(&token, &app_id, json).await,
         DiagramsAction::Create { app_id, name }   => create(&token, &app_id, &name, json).await,
-        DiagramsAction::Generate { id, prompt, mermaid, intent, session } => {
+        DiagramsAction::Generate {
+            id,
+            prompt,
+            mermaid,
+            intent,
+            session,
+            direction_policy,
+            explicit_direction,
+            fresh_generation,
+            viewport_width,
+            viewport_height,
+        } => {
             if prompt.is_none() && mermaid.is_none() {
                 if json {
                     println!("{}", serde_json::json!({"error": "provide --prompt or --mermaid"}));
@@ -129,13 +147,23 @@ pub async fn run(action: DiagramsAction, json: bool) {
                 }
                 std::process::exit(1);
             }
-            // Capture the user's mode preference once (no-op when already set /
-            // non-interactive). The flag passed to THIS call always wins — the
-            // assistant may still pass --prompt when the stored mode is mermaid,
-            // or vice versa; this only sets the default that assistants read from
-            // `config show`, it never overrides an explicit flag.
+            // Capture the user's mode preference once (no-op when already set or
+            // non-interactive). This never overrides the explicit flag for this call.
             ensure_generation_mode(json);
-            generate(&token, &id, prompt.as_deref(), mermaid.as_deref(), intent.map(|i| i.as_str()), session.as_deref(), json).await
+            generate(
+                &token,
+                &id,
+                prompt.as_deref(),
+                mermaid.as_deref(),
+                intent.map(|i| i.as_str()),
+                session.as_deref(),
+                direction_policy.map(|policy| policy.as_str()),
+                explicit_direction.map(|direction| direction.as_str()),
+                fresh_generation,
+                viewport_width.zip(viewport_height),
+                json,
+            )
+            .await
         }
         DiagramsAction::Ask { id, prompt, session } => ask(&token, &id, &prompt, session.as_deref(), json).await,
         DiagramsAction::Sessions { action }       => match action {
@@ -153,6 +181,8 @@ pub async fn run(action: DiagramsAction, json: bool) {
             delete(&token, &resolved, force, json).await;
         }
         DiagramsAction::Format                 => format_cmd(json),
+        DiagramsAction::RulesCheck             => rules_check(&token, json).await,
+        DiagramsAction::Evaluate { captures, output } => evaluate_cmd(&captures, output.as_deref()),
         DiagramsAction::Import { id, mermaid } => import_cmd(&token, &id, &mermaid, json).await,
     }
 }
@@ -455,6 +485,10 @@ async fn generate(
     mermaid: Option<&str>,
     intent: Option<&str>,
     session: Option<&str>,
+    direction_policy: Option<&str>,
+    explicit_direction: Option<&str>,
+    fresh_generation: bool,
+    viewport: Option<(u32, u32)>,
     json: bool,
 ) {
     let mut body = if let Some(m) = mermaid {
@@ -469,7 +503,13 @@ async fn generate(
         // AI, so `intent` is meaningless here and is ignored (clap also forbids
         // pairing --intent with --mermaid).
         if !json { println!("{}", "Saving diagram...".dimmed()); }
-        serde_json::json!({ "mermaid": m })
+        direct_mermaid_body(
+            m,
+            direction_policy,
+            explicit_direction,
+            fresh_generation,
+            viewport,
+        )
     } else {
         if !json { println!("{}", "Generating...".dimmed()); }
         let mut b = serde_json::json!({ "prompt": prompt.unwrap_or("") });
@@ -669,6 +709,67 @@ async fn generate(
     // The edit went through but the server flagged something (usually truncation).
     if let Some(n) = notice {
         println!("\n{} {}", "⚠".yellow(), n);
+    }
+}
+
+fn direct_mermaid_body(
+    mermaid: &str,
+    direction_policy: Option<&str>,
+    explicit_direction: Option<&str>,
+    fresh_generation: bool,
+    viewport: Option<(u32, u32)>,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({ "mermaid": mermaid });
+    if direction_policy.is_none()
+        && explicit_direction.is_none()
+        && !fresh_generation
+        && viewport.is_none()
+    {
+        return body;
+    }
+    let mut context = serde_json::json!({
+        "policy": direction_policy.unwrap_or("preserve"),
+        "is_fresh_generation": fresh_generation,
+    });
+    if let Some(direction) = explicit_direction {
+        context["explicit"] = serde_json::Value::String(direction.to_string());
+    }
+    if let Some((width, height)) = viewport {
+        context["viewport"] = serde_json::json!({ "width": width, "height": height });
+    }
+    body["direction_context"] = context;
+    body
+}
+
+#[cfg(test)]
+mod direct_direction_tests {
+    use super::direct_mermaid_body;
+
+    #[test]
+    fn old_direct_mermaid_body_stays_unchanged() {
+        assert_eq!(
+            direct_mermaid_body("flowchart TB\n  a[A]", None, None, false, None),
+            serde_json::json!({ "mermaid": "flowchart TB\n  a[A]" })
+        );
+    }
+
+    #[test]
+    fn opt_in_direction_context_is_serialized() {
+        assert_eq!(
+            direct_mermaid_body(
+                "flowchart TB\n  a[A] --> b[B] --> c[C]",
+                Some("auto"),
+                Some("LR"),
+                true,
+                Some((1440, 900)),
+            )["direction_context"],
+            serde_json::json!({
+                "policy": "auto",
+                "explicit": "LR",
+                "is_fresh_generation": true,
+                "viewport": { "width": 1440, "height": 900 }
+            })
+        );
     }
 }
 
@@ -1092,77 +1193,200 @@ async fn delete(token: &str, id: &str, force: bool, json: bool) {
     }
 }
 
-fn format_cmd(_json: bool) {
-    let spec = serde_json::json!({
-        "editable_types": [
-            {
-                "type": "flowchart",
-                "keyword": "flowchart TB / flowchart LR (graph TD/LR also works)",
-                "when": "Architecture, services, processes, data flow, general diagrams",
-                "drillable": true,
-                "example": "flowchart TB\n    A[User] --> B[API Gateway]\n    B --> C[Auth]\n    B --> D[Payment]"
-            },
-            {
-                "type": "sequence",
-                "keyword": "sequenceDiagram",
-                "when": "Request/response, protocol, API interaction, lifecycle over time",
-                "drillable": false,
-                "example": "sequenceDiagram\n    Client->>API: POST /pay\n    API->>Stripe: charge\n    Stripe-->>API: ok\n    API-->>Client: 200"
-            },
-            {
-                "type": "class",
-                "keyword": "classDiagram",
-                "when": "Object models, domain entities, inheritance/composition",
-                "drillable": false,
-                "example": "classDiagram\n    Animal <|-- Dog\n    Animal : +name\n    Animal : +speak()"
-            },
-            {
-                "type": "er",
-                "keyword": "erDiagram",
-                "when": "Database entities, tables, relationships, cardinality",
-                "drillable": false,
-                "example": "erDiagram\n    USER ||--o{ ORDER : places\n    ORDER ||--|{ LINE_ITEM : contains"
-            },
-            {
-                "type": "state",
-                "keyword": "stateDiagram-v2",
-                "when": "Finite states, lifecycle, status transitions, workflow states",
-                "drillable": false,
-                "example": "stateDiagram-v2\n    [*] --> Pending\n    Pending --> Processing\n    Processing --> Complete\n    Processing --> Failed"
-            }
-        ],
-        "editable_types_note": "These 5 types are editable/re-generatable in Vaxis. Only flowchart supports drill blocks / child diagrams. Prefer flowchart for general architecture.",
-        "image_fallback_types": [
-            "gantt", "pie", "journey", "timeline", "mindmap", "requirementDiagram",
-            "C4", "sankey", "xychart", "block", "packet", "architecture", "kanban",
-            "radar", "treemap", "venn", "ishikawa", "info"
-        ],
-        "image_fallback_note": "Valid Mermaid, but rendered as a static image in Vaxis — NOT editable or drillable. Use only when the user explicitly asks for that family (e.g. 'make a Gantt chart', 'timeline', 'mindmap', 'C4'). Note: 'journey' is image-fallback here, not an editable type.",
-        "drill_syntax": "%% vaxis:drill <nodeId>",
-        "drill_description": "FLOWCHART ONLY. Add this comment after a node to mark it as a drill target; the CLI auto-creates a child diagram for each drill block returned by generate. Do NOT use drill blocks with sequence/class/er/state or any image-fallback type.",
-        "preserve_type_on_edit": "When editing an existing diagram, keep its current type unless the user explicitly asks to convert it.",
-        "node_id_rules": [
-            "Alphanumeric and underscores only — no spaces",
-            "camelCase or snake_case both fine",
-            "Must be unique within a diagram",
-            "Keep short — 1 to 3 words"
-        ],
-        "limits": {
-            "max_nodes_per_diagram": 50,
-            "max_edges_per_diagram": 60,
-            "recommendation": "Use drill blocks when a flowchart exceeds 30 nodes"
-        },
-        "best_practices": [
-            "flowchart TB for architecture (top-down)",
-            "flowchart LR for pipelines and data flows (left-right)",
-            "Group related nodes in subgraphs (keep them flat — never nest)",
-            "Label edges only when the relationship isn't obvious from node names",
-            "Cap each node at ~4 connections; avoid hub-and-spoke clutter",
-            "Root diagrams: broad strokes (services, domains); child diagrams: fine detail"
-        ]
-    });
-    println!("{}", serde_json::to_string_pretty(&spec).unwrap_or_default());
+fn format_spec() -> serde_json::Value {
+    serde_json::from_str(include_str!("../diagram_format.json"))
+        .expect("embedded diagram format contract must be valid JSON")
 }
+
+fn format_cmd(_json: bool) {
+    println!("{}", serde_json::to_string_pretty(&format_spec()).unwrap_or_default());
+}
+
+fn contract_drift(local: &serde_json::Value, remote: &serde_json::Value) -> Vec<String> {
+    let mut drift = Vec::new();
+    let schema_major = |value: &serde_json::Value| {
+        value
+            .as_str()
+            .and_then(|version| version.split('.').next())
+            .and_then(|major| major.parse::<u64>().ok())
+    };
+    let local_major = schema_major(&local["schema_version"]);
+    let remote_major = schema_major(&remote["schema_version"]);
+    if local_major.is_none() || local_major != remote_major {
+        drift.push(format!(
+            "unsupported schema version: CLI={} server={}",
+            local["schema_version"], remote["schema_version"]
+        ));
+    }
+    let normalized_tokens = |value: &serde_json::Value| {
+        value
+            .as_array()
+            .map(|tokens| {
+                tokens
+                    .iter()
+                    .filter_map(|token| token.as_str())
+                    .map(str::to_lowercase)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    let local_tokens = normalized_tokens(&local["authoring_contract"]["shapes"]["storage_keywords"]);
+    let remote_tokens = normalized_tokens(&remote["shapes"]["storage_keywords"]);
+    if local_tokens != remote_tokens {
+        drift.push("storage keyword list differs".to_string());
+    }
+    if local["limits"]["min_seeded_drill_nodes"] != remote["drills"]["seeded_min_nodes"] {
+        drift.push("seeded drill minimum differs".to_string());
+    }
+    drift
+}
+
+async fn rules_check(token: &str, json: bool) {
+    let response = reqwest::Client::new()
+        .get(format!("{}/api/diagrams/rules", crate::config::base_url()))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await;
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            eprintln!("{} Could not fetch server rules: {}", "✗".red(), error);
+            std::process::exit(1);
+        }
+    };
+    if !response.status().is_success() {
+        eprintln!("{} Server rules request failed (HTTP {}).", "✗".red(), response.status());
+        std::process::exit(1);
+    }
+    let remote: serde_json::Value = response.json().await.unwrap_or_default();
+    let drift = contract_drift(&format_spec(), &remote);
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "ok": drift.is_empty(),
+                "cli_version": format_spec()["schema_version"],
+                "server_version": remote["schema_version"],
+                "drift": drift,
+            }))
+            .unwrap_or_default()
+        );
+    } else if drift.is_empty() {
+        println!("{} Diagram authoring rules match the server.", "✓".green());
+    } else {
+        for item in &drift {
+            eprintln!("{} {}", "✗".red(), item);
+        }
+    }
+    if !drift.is_empty() {
+        std::process::exit(2);
+    }
+}
+
+fn evaluate_cmd(captures: &std::path::Path, output: Option<&std::path::Path>) {
+    let report = match crate::parity_eval::evaluate_capture_file(captures) {
+        Ok(report) => report,
+        Err(error) => {
+            eprintln!("{} {}", "✗".red(), error);
+            std::process::exit(1);
+        }
+    };
+    let json = serde_json::to_string_pretty(&report).expect("parity report must serialize");
+    if let Some(path) = output {
+        if let Err(error) = std::fs::write(path, &json) {
+            eprintln!("{} Could not write {}: {}", "✗".red(), path.display(), error);
+            std::process::exit(1);
+        }
+        eprintln!("{} Wrote parity report to {}", "✓".green(), path.display());
+    } else {
+        println!("{json}");
+    }
+    if report.summary.failed_captures > 0 {
+        std::process::exit(2);
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::{contract_drift, format_spec};
+
+    #[test]
+    fn format_contract_v1_snapshot() {
+        let spec = format_spec();
+        assert_eq!(spec["schema_version"], "1.0.0");
+        assert_eq!(spec["editable_types"].as_array().map(Vec::len), Some(5));
+        assert_eq!(spec["limits"]["min_seeded_drill_nodes"], 3);
+        let mut keys: Vec<&str> = spec.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "authoring_contract",
+                "best_practices",
+                "compatibility",
+                "drill_description",
+                "drill_syntax",
+                "editable_types",
+                "editable_types_note",
+                "image_fallback_note",
+                "image_fallback_types",
+                "limits",
+                "node_id_rules",
+                "preserve_type_on_edit",
+                "schema_version",
+                "skill_required_phrases",
+                "source",
+            ]
+        );
+        assert_eq!(
+            spec["authoring_contract"]["shapes"]["storage_keywords"],
+            serde_json::json!([
+                "db", "database", "store", "storage", "cache", "queue", "bucket",
+                "table", "log", "index", "vector store", "blob", "s3", "redis",
+                "postgres", "postgresql", "mongo", "mongodb", "mysql", "sqlite",
+                "kafka", "sqs", "d1", "kv", "r2", "sql", "nosql", "dynamodb",
+                "firestore", "memcached", "elasticsearch", "gcs"
+            ])
+        );
+    }
+
+    #[test]
+    fn skill_declares_matching_authoring_contract_version() {
+        let spec = format_spec();
+        let version = spec["schema_version"].as_str().unwrap();
+        let marker = format!("<!-- vaxis-authoring-rules: {version} -->");
+        let skill = include_str!("../../skills/SKILL.md");
+        assert!(
+            skill.contains(&marker),
+            "SKILL.md must declare the embedded format contract version"
+        );
+        for phrase in spec["skill_required_phrases"].as_array().unwrap() {
+            let phrase = phrase.as_str().unwrap();
+            assert!(skill.contains(phrase), "SKILL.md is missing mirrored rule `{phrase}`");
+        }
+    }
+
+    #[test]
+    fn detects_cross_repository_contract_drift() {
+        let local = format_spec();
+        let matching = serde_json::json!({
+            "schema_version": "1.1.0",
+            "shapes": { "storage_keywords": local["authoring_contract"]["shapes"]["storage_keywords"] },
+            "drills": { "seeded_min_nodes": 3 }
+        });
+        assert!(
+            contract_drift(&local, &matching).is_empty(),
+            "additive versions within the supported major must remain compatible"
+        );
+        let stale = serde_json::json!({
+            "schema_version": "2.0.0",
+            "shapes": { "storage_keywords": [] },
+            "drills": { "seeded_min_nodes": 2 }
+        });
+        assert_eq!(contract_drift(&local, &stale).len(), 3);
+    }
+}
+
 
 async fn import_cmd(token: &str, id: &str, mermaid: &str, json: bool) {
     let client = reqwest::Client::new();

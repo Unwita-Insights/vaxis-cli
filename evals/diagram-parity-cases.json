@@ -1,0 +1,62 @@
+[
+  {
+    "id": "layered-payment-architecture",
+    "category": "software-architecture",
+    "prompt": "Design a payment platform with a web client, API gateway, authentication, payment processing, Stripe, PostgreSQL, Redis, and event processing.",
+    "expect": { "direction": "TB", "min_nodes": 8, "min_subgraphs": 2, "required_labels": ["Stripe", "PostgreSQL", "Redis"], "requires_storage_shape": true, "max_connections_per_node": 4, "min_drills": 2 }
+  },
+  {
+    "id": "linear-analytics-pipeline",
+    "category": "pipeline",
+    "prompt": "Show a linear analytics pipeline from event collection through validation, enrichment, warehouse storage, aggregation, and dashboard reporting.",
+    "expect": { "direction": "LR", "min_nodes": 6, "min_subgraphs": 0, "required_labels": ["Validation", "Warehouse", "Dashboard"], "requires_storage_shape": true, "max_connections_per_node": 2, "min_drills": 0 }
+  },
+  {
+    "id": "branching-loan-approval",
+    "category": "business-process",
+    "prompt": "Model a loan approval process with identity checks, credit assessment, an approval decision, manual review, rejection, and funding.",
+    "expect": { "direction": "TB", "min_nodes": 7, "min_subgraphs": 0, "required_labels": ["Credit", "Manual Review", "Funding"], "requires_decision_shape": true, "max_connections_per_node": 4, "min_drills": 0 }
+  },
+  {
+    "id": "supabase-product-backend",
+    "category": "named-platform",
+    "prompt": "Design a product backend using Supabase and show its meaningful internal capabilities rather than representing Supabase as one box.",
+    "expect": { "direction": "TB", "min_nodes": 7, "min_subgraphs": 2, "required_labels": ["Authentication", "PostgreSQL", "Storage", "Realtime"], "requires_storage_shape": true, "max_connections_per_node": 4, "min_drills": 1 }
+  },
+  {
+    "id": "database-heavy-commerce",
+    "category": "persistence",
+    "prompt": "Create an ecommerce data architecture with catalog, orders, customers, search index, Redis cache, object storage, and an event queue.",
+    "expect": { "direction": "TB", "min_nodes": 8, "min_subgraphs": 2, "required_labels": ["Orders", "Search", "Redis", "Object Storage"], "requires_storage_shape": true, "max_connections_per_node": 4, "min_drills": 1 }
+  },
+  {
+    "id": "hospital-patient-journey",
+    "category": "non-software-domain",
+    "prompt": "Map a hospital patient journey from registration and triage through consultation, diagnostics, treatment, pharmacy, and discharge. Use healthcare language, not software component names.",
+    "expect": { "direction": "LR", "min_nodes": 7, "min_subgraphs": 0, "required_labels": ["Triage", "Diagnostics", "Treatment", "Discharge"], "max_connections_per_node": 3, "min_drills": 0 }
+  },
+  {
+    "id": "small-password-reset",
+    "category": "small-flow",
+    "prompt": "Show a concise password-reset flow: request reset, receive email, choose a new password, and confirm success.",
+    "expect": { "direction": "LR", "min_nodes": 4, "min_subgraphs": 0, "required_labels": ["Email", "New Password", "Success"], "max_connections_per_node": 2, "min_drills": 0 }
+  },
+  {
+    "id": "large-marketplace-architecture",
+    "category": "drill-hierarchy",
+    "prompt": "Design a marketplace with identity, catalog, search, ordering, payments, fulfillment, notifications, analytics, databases, caches, queues, and external providers. Keep the root readable and use drill-downs for composite subsystems.",
+    "expect": { "direction": "TB", "min_nodes": 12, "min_subgraphs": 3, "required_labels": ["Identity", "Catalog", "Payments", "Fulfillment", "Analytics"], "requires_storage_shape": true, "max_connections_per_node": 4, "min_drills": 4 }
+  },
+  {
+    "id": "preserve-edit-add-cache",
+    "category": "edit-preservation",
+    "prompt": "Given an existing client-to-API-to-PostgreSQL diagram, add Redis between the API and PostgreSQL without removing or renaming existing nodes.",
+    "expect": { "direction": "TB", "min_nodes": 4, "min_subgraphs": 0, "required_labels": ["Client", "API", "PostgreSQL", "Redis"], "requires_storage_shape": true, "max_connections_per_node": 3, "min_drills": 0 }
+  },
+  {
+    "id": "explicit-left-to-right-order-flow",
+    "category": "explicit-direction",
+    "prompt": "Draw the order lifecycle explicitly from left to right: cart, checkout, authorization, inventory reservation, shipment, and delivery.",
+    "expect": { "direction": "LR", "min_nodes": 6, "min_subgraphs": 0, "required_labels": ["Checkout", "Authorization", "Shipment", "Delivery"], "max_connections_per_node": 2, "min_drills": 0 }
+  }
+]
