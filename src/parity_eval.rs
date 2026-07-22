@@ -6,6 +6,7 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct MermaidMetrics {
@@ -19,7 +20,7 @@ pub struct MermaidMetrics {
     pub drill_count: usize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EvalCase {
     pub id: String,
     pub category: String,
@@ -27,7 +28,7 @@ pub struct EvalCase {
     pub expect: Expectations,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Expectations {
     pub direction: Option<String>,
     #[serde(default)]
@@ -49,6 +50,110 @@ pub struct Expectations {
 pub struct EvalFailure {
     pub rule: &'static str,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Capture {
+    pub case_id: String,
+    pub path: String,
+    pub mermaid: String,
+    pub model: String,
+    pub rules_version: String,
+    pub captured_at: String,
+    pub viewport: Option<Viewport>,
+    pub theme: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Viewport {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CaptureResult {
+    pub case_id: String,
+    pub path: String,
+    pub model: String,
+    pub rules_version: String,
+    pub captured_at: String,
+    pub viewport: Option<Viewport>,
+    pub theme: Option<String>,
+    pub metrics: MermaidMetrics,
+    pub failures: Vec<EvalFailure>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportSummary {
+    pub total_captures: usize,
+    pub passed_captures: usize,
+    pub failed_captures: usize,
+    pub missing_case_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ParityReport {
+    pub report_version: &'static str,
+    pub summary: ReportSummary,
+    pub results: Vec<CaptureResult>,
+}
+
+pub fn evaluate_captures(cases: &[EvalCase], captures: &[Capture]) -> Result<ParityReport, String> {
+    let cases_by_id: HashMap<&str, &EvalCase> =
+        cases.iter().map(|case| (case.id.as_str(), case)).collect();
+    let mut results = Vec::new();
+    let mut seen = HashSet::new();
+    for capture in captures {
+        let case = cases_by_id
+            .get(capture.case_id.as_str())
+            .ok_or_else(|| format!("capture references unknown case `{}`", capture.case_id))?;
+        if capture.path != "prompt" && capture.path != "mermaid" {
+            return Err(format!(
+                "capture `{}` has invalid path `{}`; expected `prompt` or `mermaid`",
+                capture.case_id, capture.path
+            ));
+        }
+        seen.insert(capture.case_id.as_str());
+        results.push(CaptureResult {
+            case_id: capture.case_id.clone(),
+            path: capture.path.clone(),
+            model: capture.model.clone(),
+            rules_version: capture.rules_version.clone(),
+            captured_at: capture.captured_at.clone(),
+            viewport: capture.viewport.clone(),
+            theme: capture.theme.clone(),
+            metrics: measure(&capture.mermaid),
+            failures: evaluate(case, &capture.mermaid),
+        });
+    }
+    let failed_captures = results.iter().filter(|result| !result.failures.is_empty()).count();
+    let missing_case_ids = cases
+        .iter()
+        .filter(|case| !seen.contains(case.id.as_str()))
+        .map(|case| case.id.clone())
+        .collect();
+    Ok(ParityReport {
+        report_version: "1.0.0",
+        summary: ReportSummary {
+            total_captures: results.len(),
+            passed_captures: results.len() - failed_captures,
+            failed_captures,
+            missing_case_ids,
+        },
+        results,
+    })
+}
+
+pub fn evaluate_capture_file(path: &Path) -> Result<ParityReport, String> {
+    let captures = std::fs::read_to_string(path)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    let captures: Vec<Capture> = serde_json::from_str(&captures)
+        .map_err(|error| format!("invalid capture JSON in {}: {error}", path.display()))?;
+    let cases: Vec<EvalCase> = serde_json::from_str(include_str!(
+        "../evals/diagram-parity-cases.json"
+    ))
+    .expect("embedded parity case catalog must be valid JSON");
+    evaluate_captures(&cases, &captures)
 }
 
 fn main_diagram(mermaid: &str) -> &str {
@@ -249,5 +354,42 @@ api --> queue[(Queue)]
             assert!(!case.prompt.trim().is_empty());
             assert!(case.expect.min_nodes > 0);
         }
+    }
+
+    #[test]
+    fn committed_structural_fixture_passes_in_ci() {
+        let captures: Vec<Capture> = serde_json::from_str(include_str!(
+            "../evals/fixtures/structural-smoke.json"
+        ))
+        .expect("structural fixture must be valid JSON");
+        let cases: Vec<EvalCase> = serde_json::from_str(include_str!(
+            "../evals/diagram-parity-cases.json"
+        ))
+        .unwrap();
+        let report = evaluate_captures(&cases, &captures).unwrap();
+        assert_eq!(report.summary.total_captures, 2);
+        assert_eq!(report.summary.failed_captures, 0, "{:#?}", report.results);
+        assert!(report.summary.missing_case_ids.len() == 8);
+    }
+
+    #[test]
+    fn capture_metadata_and_path_are_validated() {
+        let cases: Vec<EvalCase> = serde_json::from_str(include_str!(
+            "../evals/diagram-parity-cases.json"
+        ))
+        .unwrap();
+        let capture = Capture {
+            case_id: "small-password-reset".to_string(),
+            path: "unknown".to_string(),
+            mermaid: "flowchart LR\n  a[A] --> b[B]".to_string(),
+            model: "fixture".to_string(),
+            rules_version: "1.0.0".to_string(),
+            captured_at: "2026-07-22T00:00:00Z".to_string(),
+            viewport: None,
+            theme: None,
+        };
+        assert!(evaluate_captures(&cases, &[capture])
+            .unwrap_err()
+            .contains("invalid path"));
     }
 }

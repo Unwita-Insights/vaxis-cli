@@ -452,12 +452,12 @@ being added for problems already solved by better graph authoring.
   cross-repository source.
 - [ ] Add rules-version comparison between `vaxis` and `vaxis-cli`.
 - [ ] Fail CI when mirrored rules are incompatible or stale.
-- [ ] Define offline/cache behavior if the CLI consumes server-owned rules.
-- [ ] Document the rule-update and release process for both repositories.
+- [x] Define offline/cache behavior if the CLI consumes server-owned rules.
+- [x] Document the rule-update and release process for both repositories.
 
 ### Phase 5 — Regression and completion
 
-- [ ] Run deterministic structural and render-health checks in CI.
+- [x] Run deterministic structural checks in CI; add render-health checks with the web renderer.
 - [ ] Schedule model-based comparisons before prompt or model upgrades.
 - [ ] Store representative screenshot pairs for visual regression review.
 - [ ] Confirm there is no parse/render reliability regression.

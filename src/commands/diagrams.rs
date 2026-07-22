@@ -60,9 +60,16 @@ fn preflight_mermaid(mermaid: &str, json: bool) -> bool {
 pub async fn run(action: DiagramsAction, json: bool) {
     // `format` is a static reference — no auth or network needed. Handle it
     // before the auth gate so a syntax lookup works even when logged out.
-    if matches!(action, DiagramsAction::Format) {
-        format_cmd(json);
-        return;
+    match &action {
+        DiagramsAction::Format => {
+            format_cmd(json);
+            return;
+        }
+        DiagramsAction::Evaluate { captures, output } => {
+            evaluate_cmd(captures, output.as_deref());
+            return;
+        }
+        _ => {}
     }
 
     let token = match auth_token() {
@@ -107,6 +114,7 @@ pub async fn run(action: DiagramsAction, json: bool) {
             delete(&token, &resolved, force, json).await;
         }
         DiagramsAction::Format                 => format_cmd(json),
+        DiagramsAction::Evaluate { captures, output } => evaluate_cmd(&captures, output.as_deref()),
         DiagramsAction::Import { id, mermaid } => import_cmd(&token, &id, &mermaid, json).await,
     }
 }
@@ -1053,6 +1061,29 @@ fn format_spec() -> serde_json::Value {
 
 fn format_cmd(_json: bool) {
     println!("{}", serde_json::to_string_pretty(&format_spec()).unwrap_or_default());
+}
+
+fn evaluate_cmd(captures: &std::path::Path, output: Option<&std::path::Path>) {
+    let report = match crate::parity_eval::evaluate_capture_file(captures) {
+        Ok(report) => report,
+        Err(error) => {
+            eprintln!("{} {}", "✗".red(), error);
+            std::process::exit(1);
+        }
+    };
+    let json = serde_json::to_string_pretty(&report).expect("parity report must serialize");
+    if let Some(path) = output {
+        if let Err(error) = std::fs::write(path, &json) {
+            eprintln!("{} Could not write {}: {}", "✗".red(), path.display(), error);
+            std::process::exit(1);
+        }
+        eprintln!("{} Wrote parity report to {}", "✓".green(), path.display());
+    } else {
+        println!("{json}");
+    }
+    if report.summary.failed_captures > 0 {
+        std::process::exit(2);
+    }
 }
 
 #[cfg(test)]

@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "vaxis")]
@@ -246,6 +247,17 @@ pub enum DiagramsAction {
 
     /// Return Mermaid format reference — diagram types, syntax rules, limits
     Format,
+
+    /// Evaluate recorded native/direct Mermaid outputs against the parity catalog
+    Evaluate {
+        /// JSON file containing recorded outputs for one or more eval cases
+        #[arg(long)]
+        captures: PathBuf,
+
+        /// Write the JSON report to this path instead of stdout
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 
     /// Save raw Mermaid to a diagram directly, bypassing AI
     Import {

@@ -11,6 +11,9 @@ The catalog is validated by Rust tests in `src/parity_eval.rs`.
 fidelity, richness, hierarchy, and edit preservation. Keep those scores separate from the
 deterministic structural failures.
 
+`visual-rubric.md` defines common screenshot scoring. Screenshot capture itself belongs to
+the Vaxis web renderer; this repository stores the scoring contract and recorded metadata.
+
 ## Current milestone
 
 Milestone 1 provides:
@@ -28,7 +31,12 @@ credentials so results remain attributable.
 
 ```bash
 cargo test parity_eval
+vaxis diagrams evaluate --captures evals/fixtures/structural-smoke.json --json
 ```
+
+The command exits with status `2` when any recorded capture fails its deterministic
+expectations. Use `--output report.json` to write a versioned report instead of printing it.
+It runs offline and does not require authentication.
 
 ## Capture contract for the next milestone
 
