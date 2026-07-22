@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod commands;
 mod mermaid_lint;
+#[cfg(test)]
 mod parity_eval;
 
 use clap::Parser;

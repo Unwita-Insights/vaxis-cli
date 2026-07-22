@@ -7,6 +7,10 @@ generation with external-assistant `--mermaid` generation.
 and deterministic expectations that can be applied to Mermaid captured from either path.
 The catalog is validated by Rust tests in `src/parity_eval.rs`.
 
+`semantic-rubric.md` defines the scored human/model review for concept coverage, domain
+fidelity, richness, hierarchy, and edit preservation. Keep those scores separate from the
+deterministic structural failures.
+
 ## Current milestone
 
 Milestone 1 provides:

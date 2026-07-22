@@ -1046,77 +1046,76 @@ async fn delete(token: &str, id: &str, force: bool, json: bool) {
     }
 }
 
-fn format_cmd(_json: bool) {
-    let spec = serde_json::json!({
-        "editable_types": [
-            {
-                "type": "flowchart",
-                "keyword": "flowchart TB / flowchart LR (graph TD/LR also works)",
-                "when": "Architecture, services, processes, data flow, general diagrams",
-                "drillable": true,
-                "example": "flowchart TB\n    A[User] --> B[API Gateway]\n    B --> C[Auth]\n    B --> D[Payment]"
-            },
-            {
-                "type": "sequence",
-                "keyword": "sequenceDiagram",
-                "when": "Request/response, protocol, API interaction, lifecycle over time",
-                "drillable": false,
-                "example": "sequenceDiagram\n    Client->>API: POST /pay\n    API->>Stripe: charge\n    Stripe-->>API: ok\n    API-->>Client: 200"
-            },
-            {
-                "type": "class",
-                "keyword": "classDiagram",
-                "when": "Object models, domain entities, inheritance/composition",
-                "drillable": false,
-                "example": "classDiagram\n    Animal <|-- Dog\n    Animal : +name\n    Animal : +speak()"
-            },
-            {
-                "type": "er",
-                "keyword": "erDiagram",
-                "when": "Database entities, tables, relationships, cardinality",
-                "drillable": false,
-                "example": "erDiagram\n    USER ||--o{ ORDER : places\n    ORDER ||--|{ LINE_ITEM : contains"
-            },
-            {
-                "type": "state",
-                "keyword": "stateDiagram-v2",
-                "when": "Finite states, lifecycle, status transitions, workflow states",
-                "drillable": false,
-                "example": "stateDiagram-v2\n    [*] --> Pending\n    Pending --> Processing\n    Processing --> Complete\n    Processing --> Failed"
-            }
-        ],
-        "editable_types_note": "These 5 types are editable/re-generatable in Vaxis. Only flowchart supports drill blocks / child diagrams. Prefer flowchart for general architecture.",
-        "image_fallback_types": [
-            "gantt", "pie", "journey", "timeline", "mindmap", "requirementDiagram",
-            "C4", "sankey", "xychart", "block", "packet", "architecture", "kanban",
-            "radar", "treemap", "venn", "ishikawa", "info"
-        ],
-        "image_fallback_note": "Valid Mermaid, but rendered as a static image in Vaxis — NOT editable or drillable. Use only when the user explicitly asks for that family (e.g. 'make a Gantt chart', 'timeline', 'mindmap', 'C4'). Note: 'journey' is image-fallback here, not an editable type.",
-        "drill_syntax": "%% vaxis:drill <nodeId>",
-        "drill_description": "FLOWCHART ONLY. Add this comment after a node to mark it as a drill target; the CLI auto-creates a child diagram for each drill block returned by generate. Do NOT use drill blocks with sequence/class/er/state or any image-fallback type.",
-        "preserve_type_on_edit": "When editing an existing diagram, keep its current type unless the user explicitly asks to convert it.",
-        "node_id_rules": [
-            "Alphanumeric and underscores only — no spaces",
-            "camelCase or snake_case both fine",
-            "Must be unique within a diagram",
-            "Keep short — 1 to 3 words"
-        ],
-        "limits": {
-            "max_nodes_per_diagram": 50,
-            "max_edges_per_diagram": 60,
-            "recommendation": "Use drill blocks when a flowchart exceeds 30 nodes"
-        },
-        "best_practices": [
-            "flowchart TB for architecture (top-down)",
-            "flowchart LR for pipelines and data flows (left-right)",
-            "Group related nodes in subgraphs (keep them flat — never nest)",
-            "Label edges only when the relationship isn't obvious from node names",
-            "Cap each node at ~4 connections; avoid hub-and-spoke clutter",
-            "Root diagrams: broad strokes (services, domains); child diagrams: fine detail"
-        ]
-    });
-    println!("{}", serde_json::to_string_pretty(&spec).unwrap_or_default());
+fn format_spec() -> serde_json::Value {
+    serde_json::from_str(include_str!("../diagram_format.json"))
+        .expect("embedded diagram format contract must be valid JSON")
 }
+
+fn format_cmd(_json: bool) {
+    println!("{}", serde_json::to_string_pretty(&format_spec()).unwrap_or_default());
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::format_spec;
+
+    #[test]
+    fn format_contract_v1_snapshot() {
+        let spec = format_spec();
+        assert_eq!(spec["schema_version"], "1.0.0");
+        assert_eq!(spec["editable_types"].as_array().map(Vec::len), Some(5));
+        assert_eq!(spec["limits"]["min_seeded_drill_nodes"], 3);
+        let mut keys: Vec<&str> = spec.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "authoring_contract",
+                "best_practices",
+                "compatibility",
+                "drill_description",
+                "drill_syntax",
+                "editable_types",
+                "editable_types_note",
+                "image_fallback_note",
+                "image_fallback_types",
+                "limits",
+                "node_id_rules",
+                "preserve_type_on_edit",
+                "schema_version",
+                "skill_required_phrases",
+                "source",
+            ]
+        );
+        assert_eq!(
+            spec["authoring_contract"]["shapes"]["storage_keywords"],
+            serde_json::json!([
+                "db", "database", "store", "storage", "cache", "queue", "bucket",
+                "table", "log", "index", "vector store", "blob", "s3", "redis",
+                "postgres", "postgresql", "mongo", "mongodb", "mysql", "sqlite",
+                "kafka", "sqs", "d1", "kv", "r2", "sql", "nosql", "dynamodb",
+                "firestore", "memcached", "elasticsearch", "gcs"
+            ])
+        );
+    }
+
+    #[test]
+    fn skill_declares_matching_authoring_contract_version() {
+        let spec = format_spec();
+        let version = spec["schema_version"].as_str().unwrap();
+        let marker = format!("<!-- vaxis-authoring-rules: {version} -->");
+        let skill = include_str!("../../skills/SKILL.md");
+        assert!(
+            skill.contains(&marker),
+            "SKILL.md must declare the embedded format contract version"
+        );
+        for phrase in spec["skill_required_phrases"].as_array().unwrap() {
+            let phrase = phrase.as_str().unwrap();
+            assert!(skill.contains(phrase), "SKILL.md is missing mirrored rule `{phrase}`");
+        }
+    }
+}
+
 
 async fn import_cmd(token: &str, id: &str, mermaid: &str, json: bool) {
     let client = reqwest::Client::new();

@@ -16,6 +16,9 @@
 //!      (`\bid\b` present). Ids that aren't get dropped.
 //!   4. Drills apply to flowcharts only (`graph` / `flowchart`).
 
+use regex::Regex;
+use std::collections::HashSet;
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Level {
     Error,
@@ -255,6 +258,41 @@ pub fn lint(mermaid: &str) -> LintReport {
         }
     }
 
+    // W3 — native generation drops a non-empty seeded drill with fewer than
+    // three real nodes. Direct Mermaid preserves bare markers, so distinguish
+    // an intentionally empty seed from a thin non-empty child and warn before
+    // the request is sent instead of silently changing it.
+    let lines: Vec<&str> = mermaid.lines().collect();
+    let marker_indexes: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| parse_marker(line).map(|_| index))
+        .collect();
+    let node_re = Regex::new(r#"\b([A-Za-z_][\w-]*)\s*(?:\[\(|\[|\{|\(\()"#).unwrap();
+    for (position, marker_index) in marker_indexes.iter().enumerate() {
+        let end = marker_indexes.get(position + 1).copied().unwrap_or(lines.len());
+        let seed = lines[marker_index + 1..end].join("\n");
+        if seed.trim().is_empty() {
+            continue;
+        }
+        let nodes: HashSet<&str> = node_re
+            .captures_iter(&seed)
+            .map(|captures| captures.get(1).unwrap().as_str())
+            .collect();
+        if nodes.len() < 3 {
+            issues.push(Issue {
+                level: Level::Warning,
+                code: "thin_seeded_drill",
+                message: format!(
+                    "Line {}: seeded drill contains {} real node(s); use at least 3 meaningful nodes, or leave the marker bare to create an empty child.",
+                    marker_index + 1,
+                    nodes.len()
+                ),
+                line: Some(marker_index + 1),
+            });
+        }
+    }
+
     // W1/W2 — bracket & quote balance, flowcharts only. Other diagram types use
     // characters like `{`/`}` for their own syntax (ER cardinality `||--o{`),
     // which would false-positive, so we scope these to flowcharts.
@@ -369,6 +407,29 @@ mod tests {
         let m = "graph TD\n    a[A] --> b[B]";
         assert!(!lint(m).has_errors());
         assert!(drill_node_ids(m).is_empty());
+    }
+
+    #[test]
+    fn bare_marker_does_not_warn_as_thin_seed() {
+        let m = "flowchart TB\n  api[API]\n  auth[Auth]\n  api --> auth\n%% vaxis:drill auth";
+        let report = lint(m);
+        assert!(!report.warnings().any(|issue| issue.code == "thin_seeded_drill"));
+    }
+
+    #[test]
+    fn warns_for_non_empty_seed_below_three_nodes() {
+        let m = "flowchart TB\n  api[API]\n  auth[Auth]\n  api --> auth\n%% vaxis:drill auth\nflowchart TB\n  login[Login] --> token[Token]";
+        let report = lint(m);
+        assert!(report.warnings().any(|issue| issue.code == "thin_seeded_drill"));
+        assert!(!report.has_errors());
+    }
+
+    #[test]
+    fn accepts_seed_with_three_real_nodes() {
+        let m = "flowchart TB\n  api[API]\n  auth[Auth]\n  api --> auth\n%% vaxis:drill auth\nflowchart TB\n  login[Login] --> token[Token]\n  token --> session[(Session Store)]";
+        let report = lint(m);
+        assert!(!report.warnings().any(|issue| issue.code == "thin_seeded_drill"));
+        assert!(!report.has_errors());
     }
 
     #[test]

@@ -404,34 +404,34 @@ being added for problems already solved by better graph authoring.
 - [x] Implement structural metrics for nodes, edges, subgraphs, fan-out, shapes, and drills.
 - [ ] Implement render-health checks for conversion, overlap, clipping, aspect ratio, and
   subgraph containment.
-- [ ] Define a semantic-coverage rubric.
+- [x] Define a semantic-coverage rubric.
 - [ ] Define a visual-quality rubric and save fixed-viewport screenshots.
 - [ ] Publish the baseline results before changing authoring rules.
 
 ### Phase 1 — `SKILL.md` parity
 
-- [ ] Add richness rules based on `S_RICHNESS`.
-- [ ] Add domain-vocabulary rules based on `S_DOMAIN`.
-- [ ] Add the persistence-cylinder and genuine-branch self-check.
-- [ ] Add layered-DAG and anti-hub-and-spoke guidance.
-- [ ] Strengthen LR pipeline versus TB architecture guidance.
-- [ ] Add seeded-drill substance guidance without rejecting bare markers.
+- [x] Add richness rules based on `S_RICHNESS`.
+- [x] Add domain-vocabulary rules based on `S_DOMAIN`.
+- [x] Add the persistence-cylinder and genuine-branch self-check.
+- [x] Add layered-DAG and anti-hub-and-spoke guidance.
+- [x] Strengthen LR pipeline versus TB architecture guidance.
+- [x] Add seeded-drill substance guidance without rejecting bare markers.
 - [x] Replace the inaccurate “no server-side styling pass” explanation. *(PR #15)*
 - [x] Explain that V2 palette assignment depends on subgraph membership. *(PR #15)*
 - [x] Label explicit Mermaid colors as fallback compatibility if they are retained. *(PR #15)*
-- [ ] Run Mermaid lint/regression tests for every skill example.
+- [x] Run Mermaid lint/regression tests for every skill example.
 - [ ] Re-run the baseline and document the measured change.
 
 ### Phase 2 — Authoritative format contract
 
-- [ ] Design a versioned machine-readable rules schema.
-- [ ] Add richness, domain, shape, grouping, topology, direction, drill, and preservation
+- [x] Design a versioned machine-readable rules schema.
+- [x] Add richness, domain, shape, grouping, topology, direction, drill, and preservation
   rules to the schema.
-- [ ] Include the authoritative storage-keyword list.
-- [ ] Expose the rules version through `vaxis diagrams format --json`.
-- [ ] Generate or validate duplicated `SKILL.md` content against the schema.
-- [ ] Add snapshot tests for the JSON contract.
-- [ ] Document compatibility rules for future schema versions.
+- [x] Include the authoritative storage-keyword list.
+- [x] Expose the rules version through `vaxis diagrams format --json`.
+- [x] Generate or validate duplicated `SKILL.md` content against the schema.
+- [x] Add snapshot tests for the JSON contract.
+- [x] Document compatibility rules for future schema versions.
 
 ### Phase 3 — Deterministic improvements
 
@@ -441,10 +441,10 @@ being added for problems already solved by better graph authoring.
 - [ ] Add opt-in auto-direction only if evaluation results justify it.
 - [ ] Add direction tests for fresh generation, edits, explicit LR/TB, and portrait
   viewports.
-- [ ] Measure thin seeded drills before introducing enforcement.
-- [ ] Prefer warning metadata to silent seeded-drill deletion.
-- [ ] Verify that bare drill markers continue to create empty children.
-- [ ] Add regression tests for concise but valid seeded children.
+- [x] Measure thin seeded drills before introducing enforcement.
+- [x] Prefer warning metadata to silent seeded-drill deletion.
+- [x] Verify that bare drill markers continue to create empty children.
+- [x] Add regression tests for concise but valid seeded children.
 
 ### Phase 4 — Drift prevention
 
