@@ -72,6 +72,26 @@ impl FlowDirection {
     }
 }
 
+/// How diagrams are generated. Mirrors the `Intent` pattern above: a `ValueEnum`
+/// so clap validates the flag at parse time, with `as_str()` for the string
+/// form stored in config.toml.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum GenerationMode {
+    /// The driving AI (Claude / Codex) writes the Mermaid itself
+    Mermaid,
+    /// Vaxis's server AI generates the diagram
+    Prompt,
+}
+
+impl GenerationMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GenerationMode::Mermaid => "mermaid",
+            GenerationMode::Prompt => "prompt",
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum Commands {
     /// Log in with your Google account
@@ -106,6 +126,9 @@ pub enum Commands {
 pub enum ConfigAction {
     /// Set the Vaxis server URL (e.g. http://localhost:3000)
     SetUrl { url: String },
+
+    /// Set how diagrams are generated: `mermaid` (your own AI writes them) or `prompt` (Vaxis server AI)
+    SetMode { mode: GenerationMode },
 
     /// Show current configuration
     Show,

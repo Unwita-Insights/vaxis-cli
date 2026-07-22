@@ -57,6 +57,46 @@ fn preflight_mermaid(mermaid: &str, json: bool) -> bool {
     true
 }
 
+/// First-run preference. The first time a human runs `diagrams generate` in a
+/// real terminal, ask whether diagrams should be authored by their own AI
+/// (`--mermaid`) or by Vaxis's server AI (`--prompt`), and remember the choice
+/// so the assistant can honor it (see skills/SKILL.md — "generation mode").
+///
+/// Silent no-op — never blocks — when the mode is already set, in `--json` mode,
+/// or when there is no interactive terminal (e.g. the CLI is being driven by an
+/// assistant). Those cases just proceed with whatever flag was passed.
+fn ensure_generation_mode(json: bool) {
+    use std::io::IsTerminal;
+    if json || config::generation_mode().is_some() {
+        return;
+    }
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return;
+    }
+    // Flag first so the labels don't depend on manual column alignment.
+    let options = [
+        "--mermaid — your own AI (Claude / Codex) writes the diagrams (recommended)",
+        "--prompt — Vaxis's own AI generates the diagrams for you",
+    ];
+    let choice = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("How should Vaxis generate diagrams? (saved — you won't be asked again)")
+        .items(&options)
+        .default(0)
+        .interact();
+    let mode = match choice {
+        Ok(0) => "mermaid",
+        Ok(1) => "prompt",
+        _ => return, // cancelled — leave unset so we ask again next time
+    };
+    config::set_generation_mode(mode);
+    println!(
+        "{} Saved generation mode: {}. Change it anytime with {}.",
+        "✓".green(),
+        mode.cyan(),
+        "vaxis config set-mode <mermaid|prompt>".yellow()
+    );
+}
+
 pub async fn run(action: DiagramsAction, json: bool) {
     // `format` is a static reference — no auth or network needed. Handle it
     // before the auth gate so a syntax lookup works even when logged out.
@@ -107,6 +147,7 @@ pub async fn run(action: DiagramsAction, json: bool) {
                 }
                 std::process::exit(1);
             }
+            ensure_generation_mode(json);
             generate(
                 &token,
                 &id,
@@ -121,6 +162,11 @@ pub async fn run(action: DiagramsAction, json: bool) {
                 json,
             )
             .await
+            // Capture the user's mode preference once (no-op when already set /
+            // non-interactive). The flag passed to THIS call always wins — the
+            // assistant may still pass --prompt when the stored mode is mermaid,
+            // or vice versa; this only sets the default that assistants read from
+            // `config show`, it never overrides an explicit flag.
         }
         DiagramsAction::Ask { id, prompt, session } => ask(&token, &id, &prompt, session.as_deref(), json).await,
         DiagramsAction::Sessions { action }       => match action {
