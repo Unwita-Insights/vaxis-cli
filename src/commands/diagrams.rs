@@ -1360,6 +1360,10 @@ mod format_tests {
             skill.contains(&marker),
             "SKILL.md must declare the embedded format contract version"
         );
+        assert!(
+            skill.contains("seed drill content in the same call"),
+            "the agent skill must require populated direct-Mermaid drills"
+        );
         for phrase in spec["skill_required_phrases"].as_array().unwrap() {
             let phrase = phrase.as_str().unwrap();
             assert!(skill.contains(phrase), "SKILL.md is missing mirrored rule `{phrase}`");

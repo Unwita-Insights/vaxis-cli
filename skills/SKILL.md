@@ -107,7 +107,11 @@ vaxis diagrams generate <diagramId> --mermaid "graph TD
     api -->|charges| pay
     pay --> db
 %% vaxis:drill auth
-%% vaxis:drill pay" --json
+flowchart TB
+    login[Login] --> token[Issue Token] --> sessions[(Session Store)]
+%% vaxis:drill pay
+flowchart TB
+    request[Payment Request] --> provider[Payment Provider] --> result{Approved?}" --json
 
 # Server AI generates (use only when testing server AI directly, not when Claude is the AI)
 vaxis diagrams generate <diagramId> --prompt "Design a payment service with Stripe integration" --json
@@ -180,11 +184,18 @@ vaxis diagrams import <diagramId> --mermaid "graph TD\n    A[User] --> B[API]" -
 
 5. Generate the Mermaid yourself based on the description (and answers), then save it:
    vaxis diagrams generate <ROOT_ID> --mermaid "<your-generated-mermaid>" --json
+   → For a fresh architecture, seed every composite drill with a complete child
+     flowchart in this same Mermaid payload. Do not emit marker-only drills unless
+     the user explicitly asks for a staged/empty hierarchy.
    → For each entry in drills[]: save diagram_id as child diagram IDs
 
-6. Tell the user what was created. Offer to drill into any subsystem.
+6. Verify the returned `drills[]` and read at least one new child with
+   `vaxis diagrams show <childId> --json`. A seeded child must have non-empty
+   `current_mermaid`; populate any empty child before reporting completion.
 
-7. vaxis diagrams share <ROOT_ID> --json
+7. Tell the user what was created, including the populated subsystem diagrams.
+
+8. vaxis diagrams share <ROOT_ID> --json
    → Give the user the shareable link at the end of the session. Share the ROOT
      diagram — the link covers the diagrams it drills into.
 ```
@@ -546,9 +557,9 @@ graph TD
 3. **`<nodeId>` must be a node defined in the main diagram above** (exact ID). Markers whose
    ID isn't a real node in the main diagram are dropped.
 
-Leave a marker bare (as above) to auto-create an **empty** child you fill later with a
-separate `generate <childId> --mermaid`. Optionally, seed the child in the same call by
-following the marker with a full sub-diagram:
+**For fresh architecture generation, seed drill content in the same call.** Follow each
+marker with a complete child flowchart so the result has the same populated hierarchy as
+the Vaxis server-AI path:
 
 ```
 graph TD
@@ -568,7 +579,9 @@ inside it, and drill blocks are one level deep (a child may not contain its own 
 When you seed a child, give it **at least 3 real, meaningfully named nodes** connected by
 useful edges. The server drops non-empty seeded drills below this floor. This minimum does
 not apply to a bare marker: a bare `%% vaxis:drill <nodeId>` intentionally creates an empty
-child to fill later and must remain supported.
+child to fill later and must remain supported. Use bare markers only when the user explicitly
+requests staged design. For a complete fresh architecture, an empty drill is incomplete and
+must be populated before handoff.
 The CLI auto-creates a child diagram for every marker after `generate` returns. **Drill
 blocks work on flowcharts only** — never add them to sequence / class / er / state or any
 image-fallback diagram.
@@ -598,11 +611,25 @@ graph TD
     pay --> db
     api --> cache
 %% vaxis:drill auth
+flowchart TB
+    request[Auth Request] --> validate[Validate Credentials]
+    validate --> token[Issue Token]
+    token --> sessions[(Session Store)]
 %% vaxis:drill pay
+flowchart TB
+    request[Payment Request] --> idempotency[(Idempotency Store)]
+    idempotency --> provider[Payment Provider]
+    provider --> result{Approved?}
 %% vaxis:drill order
+flowchart TB
+    create[Create Order] --> reserve[Reserve Inventory]
+    reserve --> persist[(Order Database)]
+    persist --> events[(Order Queue)]
 ```
 
-The three services drill (composite); the database and cache don't (leaf). Flattening auth/pay/order's internals into the root — or drilling `db`/`cache` — is wrong.
+The three services drill with populated children (composite); the database and cache don't
+(leaf). Flattening their internals into the root, emitting only bare markers, or drilling
+`db`/`cache` is wrong for a complete fresh architecture.
 
 Don't over-fragment: a genuinely small diagram (a handful of nodes with no real subsystems) needs no drills — an empty `drills[]` is correct there. The rule is **"drill composites," not "drill everything."**
 
@@ -976,7 +1003,10 @@ input or file errors.
 
 3. **Use tree to find the right diagram.** Never guess diagram IDs. Run `vaxis diagrams tree --json` to navigate to the correct level.
 
-4. **Handle drill diagrams automatically.** When `generate` returns `drills`, the CLI has already created the child diagrams. Report their IDs and names to the user. Offer to generate content for each one.
+4. **Handle drill diagrams automatically.** For fresh architecture on the `--mermaid` path,
+   include complete seeded child flowcharts after every composite marker in the same request.
+   When `generate` returns `drills`, verify they have `current_mermaid` and populate any
+   empty child before reporting completion. Bare children are only for explicitly staged design.
 
 5. **Undo before retry.** If the user says "that's wrong", "undo", "go back", or "try again" — always run `vaxis diagrams undo` first, then re-generate. Never generate on top of bad output.
 
@@ -1005,7 +1035,12 @@ input or file errors.
 
 14. **Preserve existing nodes on every update.** When updating a diagram, read `current_mermaid` first and carry forward all existing nodes. Only modify what the user asked to change. No node should disappear from an update unless the user explicitly asked to remove it.
 
-15. **Drill by default — it's the core feature.** When generating an architecture, never emit a flat single-level diagram. Structure it as a hierarchy: major subsystems at the root, a `%% vaxis:drill` on every composite subsystem, and no drills on leaf/atomic nodes (databases, caches, external services). A diagram that could have subsystems but has none is a missed use of Vaxis. See **"Drilling is Vaxis's core feature"** in the Drill syntax section for the composite-vs-leaf rule and a worked example.
+15. **Drill by default, and populate the drills.** When generating an architecture, never
+   emit a flat single-level diagram. Structure it as a hierarchy: major subsystems at the
+   root, a `%% vaxis:drill` plus a complete seeded child flowchart for every composite
+   subsystem, and no drills on leaf/atomic nodes (databases, caches, external services).
+   A diagram with missing or marker-only composite drills is incomplete unless the user
+   explicitly requested staged design. See **"Drilling is Vaxis's core feature"** above.
 
 16. **Honor the user's generation mode.** Before generating, read `vaxis config show --json` and check the `generation_mode` field. If it is `"prompt"`, generate via `--prompt` (Vaxis server AI). If it is `"mermaid"`, `null`, or unavailable, write the Mermaid yourself and use `--mermaid` (the default). See **"Generation mode"** near the top of this skill. Never switch modes on your own — the flag you pass must match the stored preference.
 
