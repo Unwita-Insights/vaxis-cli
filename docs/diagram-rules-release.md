@@ -13,6 +13,8 @@ without authentication or network access.
 3. Update `src/diagram_format.json` in this repository from the canonical contract.
 4. Update `skills/SKILL.md` and its `vaxis-authoring-rules` marker.
 5. Run `cargo test` and `vaxis diagrams format --json`.
+   Against a deployed server, run `vaxis diagrams rules-check --json`; it exits with status
+   `2` when the embedded schema version, storage keywords, or seeded-drill floor drift.
 6. Capture native and direct outputs with model, rules version, viewport, and theme, then
    run `vaxis diagrams evaluate --captures <file>`.
 7. Release the server before or together with a CLI whose embedded contract requires the

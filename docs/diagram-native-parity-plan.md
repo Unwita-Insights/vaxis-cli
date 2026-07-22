@@ -436,10 +436,10 @@ being added for problems already solved by better graph authoring.
 ### Phase 3 — Deterministic improvements
 
 - [ ] Review baseline failures that remain after the prompt-parity work.
-- [ ] Specify direct-Mermaid direction metadata and backward-compatible defaults.
-- [ ] Preserve direction by default when the required context is unavailable.
-- [ ] Add opt-in auto-direction only if evaluation results justify it.
-- [ ] Add direction tests for fresh generation, edits, explicit LR/TB, and portrait
+- [x] Specify direct-Mermaid direction metadata and backward-compatible defaults.
+- [x] Preserve direction by default when the required context is unavailable.
+- [x] Add opt-in auto-direction behind explicit request context.
+- [x] Add direction tests for fresh generation, edits, explicit LR/TB, and portrait
   viewports.
 - [x] Measure thin seeded drills before introducing enforcement.
 - [x] Prefer warning metadata to silent seeded-drill deletion.
@@ -448,9 +448,9 @@ being added for problems already solved by better graph authoring.
 
 ### Phase 4 — Drift prevention
 
-- [ ] Choose a versioned server endpoint or published rules artifact as the authoritative
+- [x] Choose a versioned server endpoint and published rules artifact as the authoritative
   cross-repository source.
-- [ ] Add rules-version comparison between `vaxis` and `vaxis-cli`.
+- [x] Add rules-version comparison between `vaxis` and `vaxis-cli`.
 - [ ] Fail CI when mirrored rules are incompatible or stale.
 - [x] Define offline/cache behavior if the CLI consumes server-owned rules.
 - [x] Document the rule-update and release process for both repositories.
