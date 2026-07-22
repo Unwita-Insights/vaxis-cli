@@ -166,7 +166,7 @@ pub fn measure(mermaid: &str) -> MermaidMetrics {
     let header = Regex::new(r"(?im)^\s*(?:flowchart|graph)\s+(TB|TD|LR|RL|BT)\b").unwrap();
     let node = Regex::new(r#"\b([A-Za-z_][\w-]*)\s*(?:\[\(|\[|\{|\(\()"#).unwrap();
     let edge = Regex::new(
-        r#"\b([A-Za-z_][\w-]*)(?:\s*(?:\[\([^\n]*?\)\]|\[[^\n]*?\]|\{[^\n]*?\}|\(\([^\n]*?\)\)))?\s*(?:-->|-\.->|==>)(?:\|[^|]*\|)?\s*([A-Za-z_][\w-]*)"#,
+        r#"\b([A-Za-z_][\w-]*)(?:\s*(?:\[\([^\n]*?\)\]|\[[^\n]*?\]|\{[^\n]*?\}|\(\([^\n]*?\)\)))?\s*(?:-->|-\.->|==>|--\s+[^\n]+?\s+-->)(?:\|[^|]*\|)?\s*([A-Za-z_][\w-]*)"#,
     )
     .unwrap();
     let cylinder = Regex::new(r#"\b[A-Za-z_][\w-]*\s*\[\("#).unwrap();
@@ -209,12 +209,46 @@ pub fn measure(mermaid: &str) -> MermaidMetrics {
         max_connections: connections.values().copied().max().unwrap_or(0),
         cylinder_count: cylinder.find_iter(main).count(),
         rhombus_count: rhombus.find_iter(main).count(),
-        drill_count: drill
-            .captures_iter(mermaid)
-            .map(|c| c[1].to_string())
-            .collect::<HashSet<_>>()
-            .len(),
+        drill_count: if header.is_match(main) {
+            drill
+                .captures_iter(mermaid)
+                .map(|c| c[1].to_string())
+                .filter(|id| nodes.contains(id))
+                .collect::<HashSet<_>>()
+                .len()
+        } else {
+            0
+        },
     }
+}
+
+fn visible_labels(mermaid: &str) -> String {
+    let main = main_diagram(mermaid);
+    let node_labels = Regex::new(
+        r#"\b[A-Za-z_][\w-]*\s*(?:\[\(([^\]\n]*?)\)\]|\[([^\]\n]*?)\]|\{([^}\n]*?)\}|\(\(([^)\n]*?)\)\))"#,
+    )
+    .unwrap();
+    let pipe_edge_label = Regex::new(r#"(?:-->|-\.->|==>)\|([^|\n]+)\|"#).unwrap();
+    let long_edge_label = Regex::new(r#"--\s+([^\n]+?)\s+-->"#).unwrap();
+    let mut labels = Vec::new();
+    for line in main.lines().filter(|line| !line.trim_start().starts_with("%%")) {
+        for captures in node_labels.captures_iter(line) {
+            if let Some(label) = (1..=4).find_map(|index| captures.get(index)) {
+                labels.push(label.as_str().trim_matches(['\"', '\'', ' ']).to_string());
+            }
+        }
+        labels.extend(
+            pipe_edge_label
+                .captures_iter(line)
+                .map(|captures| captures[1].trim().to_string()),
+        );
+        labels.extend(
+            long_edge_label
+                .captures_iter(line)
+                .map(|captures| captures[1].trim().to_string()),
+        );
+    }
+    labels.join(" ").to_lowercase()
 }
 
 pub fn evaluate(case: &EvalCase, mermaid: &str) -> Vec<EvalFailure> {
@@ -271,7 +305,7 @@ pub fn evaluate(case: &EvalCase, mermaid: &str) -> Vec<EvalFailure> {
             message: format!("expected at least {}, got {}", expected.min_drills, metrics.drill_count),
         });
     }
-    let lower = mermaid.to_lowercase();
+    let lower = visible_labels(mermaid);
     for label in &expected.required_labels {
         if !lower.contains(&label.to_lowercase()) {
             failures.push(EvalFailure {
@@ -309,6 +343,68 @@ api --> queue[(Queue)]
                 rhombus_count: 1,
                 drill_count: 1,
             }
+        );
+    }
+
+    #[test]
+    fn counts_long_form_labeled_edges_and_fan_out() {
+        let mermaid = r#"flowchart LR
+  api[API] -- reads --> cache[(Cache)]
+  api -- writes --> db[(Database)]
+  api -- publishes --> queue[(Queue)]"#;
+        let metrics = measure(mermaid);
+        assert_eq!(metrics.edge_count, 3);
+        assert_eq!(metrics.max_connections, 3);
+    }
+
+    #[test]
+    fn counts_only_drills_for_nodes_in_the_main_flowchart() {
+        let flowchart = r#"flowchart TB
+  api[API] --> worker[Worker]
+%% vaxis:drill api
+%% vaxis:drill missing"#;
+        assert_eq!(measure(flowchart).drill_count, 1);
+
+        let sequence = r#"sequenceDiagram
+  participant api as API
+%% vaxis:drill api"#;
+        assert_eq!(measure(sequence).drill_count, 0);
+    }
+
+    #[test]
+    fn required_concepts_must_appear_in_visible_labels() {
+        let case = EvalCase {
+            id: "visible-label".to_string(),
+            category: "test".to_string(),
+            prompt: "test".to_string(),
+            expect: Expectations {
+                direction: None,
+                min_nodes: 0,
+                min_subgraphs: 0,
+                required_labels: vec!["PostgreSQL".to_string()],
+                requires_storage_shape: false,
+                requires_decision_shape: false,
+                max_connections_per_node: None,
+                min_drills: 0,
+            },
+        };
+        assert_eq!(
+            evaluate(&case, "flowchart TB\n  postgresql[(DB)]")[0].rule,
+            "required_label"
+        );
+        assert!(evaluate(&case, "flowchart TB\n  db[(PostgreSQL)]").is_empty());
+        assert!(evaluate(
+            &case,
+            "flowchart TB\n  api[API] -- PostgreSQL --> db[(DB)]"
+        )
+        .is_empty());
+        assert_eq!(
+            evaluate(
+                &case,
+                "flowchart TB\n  db[(DB)]\n  %% PostgreSQL is intentionally hidden"
+            )[0]
+            .rule,
+            "required_label"
         );
     }
 

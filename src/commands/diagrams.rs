@@ -1204,9 +1204,17 @@ fn format_cmd(_json: bool) {
 
 fn contract_drift(local: &serde_json::Value, remote: &serde_json::Value) -> Vec<String> {
     let mut drift = Vec::new();
-    if local["schema_version"] != remote["schema_version"] {
+    let schema_major = |value: &serde_json::Value| {
+        value
+            .as_str()
+            .and_then(|version| version.split('.').next())
+            .and_then(|major| major.parse::<u64>().ok())
+    };
+    let local_major = schema_major(&local["schema_version"]);
+    let remote_major = schema_major(&remote["schema_version"]);
+    if local_major.is_none() || local_major != remote_major {
         drift.push(format!(
-            "schema version differs: CLI={} server={}",
+            "unsupported schema version: CLI={} server={}",
             local["schema_version"], remote["schema_version"]
         ));
     }
@@ -1362,11 +1370,14 @@ mod format_tests {
     fn detects_cross_repository_contract_drift() {
         let local = format_spec();
         let matching = serde_json::json!({
-            "schema_version": "1.0.0",
+            "schema_version": "1.1.0",
             "shapes": { "storage_keywords": local["authoring_contract"]["shapes"]["storage_keywords"] },
             "drills": { "seeded_min_nodes": 3 }
         });
-        assert!(contract_drift(&local, &matching).is_empty());
+        assert!(
+            contract_drift(&local, &matching).is_empty(),
+            "additive versions within the supported major must remain compatible"
+        );
         let stale = serde_json::json!({
             "schema_version": "2.0.0",
             "shapes": { "storage_keywords": [] },
