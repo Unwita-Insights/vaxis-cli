@@ -147,6 +147,8 @@ pub async fn run(action: DiagramsAction, json: bool) {
                 }
                 std::process::exit(1);
             }
+            // Capture the user's mode preference once (no-op when already set or
+            // non-interactive). This never overrides the explicit flag for this call.
             ensure_generation_mode(json);
             generate(
                 &token,
@@ -162,11 +164,6 @@ pub async fn run(action: DiagramsAction, json: bool) {
                 json,
             )
             .await
-            // Capture the user's mode preference once (no-op when already set /
-            // non-interactive). The flag passed to THIS call always wins — the
-            // assistant may still pass --prompt when the stored mode is mermaid,
-            // or vice versa; this only sets the default that assistants read from
-            // `config show`, it never overrides an explicit flag.
         }
         DiagramsAction::Ask { id, prompt, session } => ask(&token, &id, &prompt, session.as_deref(), json).await,
         DiagramsAction::Sessions { action }       => match action {
