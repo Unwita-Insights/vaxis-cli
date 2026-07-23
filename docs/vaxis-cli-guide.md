@@ -141,8 +141,8 @@ vaxis install --skills --agent codex --project --yes
 The installed discovery file loads the version-matched core contract from the CLI by running
 `vaxis skills get core`. Inspect it before installation with `vaxis skills preview core`.
 Supported agents make the skill available on subsequent sessions or skill reloads.
-Codex project installs use the shared `.agents/skills/vaxis/SKILL.md` location; selecting both
-`agents` and `codex` at project scope therefore produces one deduplicated file.
+Codex installs use the shared `.agents/skills/vaxis/SKILL.md` location at both project and
+global scope; selecting both `agents` and `codex` therefore produces one deduplicated file.
 
 **Anything else / no skill support** — tell the assistant:
 > Use the `vaxis` CLI for diagrams. Run `vaxis skills get core` and follow the returned

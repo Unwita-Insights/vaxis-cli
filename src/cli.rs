@@ -100,7 +100,7 @@ pub enum Commands {
         #[arg(long)]
         skills: bool,
 
-        /// Target agent (repeatable; Codex project installs use the shared .agents path)
+        /// Target agent (repeatable; Codex installs use the shared .agents path)
         #[arg(long, value_enum)]
         agent: Vec<SkillAgent>,
 

@@ -47,7 +47,7 @@ const AGENTS: &[AgentSpec] = &[
         id: SkillAgent::Codex,
         display_name: "Codex",
         project_path: ".agents/skills/vaxis/SKILL.md",
-        global_path: ".codex/skills/vaxis/SKILL.md",
+        global_path: ".agents/skills/vaxis/SKILL.md",
         refresh_guidance: "Start a new Codex session or reload skills.",
     },
 ];
@@ -528,14 +528,24 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_project_destinations_are_suppressed() {
-        let targets = resolved_targets(
+    fn duplicate_agent_skills_destinations_are_suppressed() {
+        let project_targets = resolved_targets(
             &[SkillAgent::Agents, SkillAgent::Codex],
             InstallScope::Project,
             false,
         );
-        assert_eq!(targets.len(), 1);
-        assert!(targets[0]
+        assert_eq!(project_targets.len(), 1);
+        assert!(project_targets[0]
+            .1
+            .ends_with(".agents/skills/vaxis/SKILL.md"));
+
+        let global_targets = resolved_targets(
+            &[SkillAgent::Agents, SkillAgent::Codex],
+            InstallScope::Global,
+            false,
+        );
+        assert_eq!(global_targets.len(), 1);
+        assert!(global_targets[0]
             .1
             .ends_with(".agents/skills/vaxis/SKILL.md"));
     }
@@ -546,6 +556,6 @@ mod tests {
         assert!(install_path(codex, InstallScope::Project, false)
             .ends_with(".agents/skills/vaxis/SKILL.md"));
         assert!(install_path(codex, InstallScope::Global, false)
-            .ends_with(".codex/skills/vaxis/SKILL.md"));
+            .ends_with(".agents/skills/vaxis/SKILL.md"));
     }
 }

@@ -114,16 +114,15 @@ Project scope:
 .claude/skills/vaxis/SKILL.md
 ```
 
-Codex uses the shared `.agents/skills/vaxis/SKILL.md` project path, so selecting both
-`--agent agents` and `--agent codex` at project scope intentionally writes one deduplicated
-file.
+Codex uses the shared `.agents/skills/vaxis/SKILL.md` path at both project and global scope,
+so selecting both `--agent agents` and `--agent codex` intentionally writes one deduplicated
+file per selected scope.
 
 User/global scope:
 
 ```text
 ~/.agents/skills/vaxis/SKILL.md
 ~/.claude/skills/vaxis/SKILL.md
-~/.codex/skills/vaxis/SKILL.md
 ```
 
 ## Agent Path Mapping

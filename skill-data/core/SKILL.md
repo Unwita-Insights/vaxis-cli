@@ -214,7 +214,8 @@ vaxis skills preview core
 `--json` never prompts. Missing install selections and unknown skill names return
 `{"error":"<stable_code>","message":"<details>"}` with exit status `1`. `get core` prints the
 exact raw embedded content; `preview core` currently prints the same content for explicit
-human inspection. Codex project installs use the shared `.agents/skills/vaxis/SKILL.md` path.
+human inspection. Codex installs use the shared `.agents/skills/vaxis/SKILL.md` path at both
+project and global scope.
 
 ### Applications
 
