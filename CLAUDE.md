@@ -6,13 +6,16 @@ Guidance for Claude Code when working in the `vaxis-cli` repository.
 
 `vaxis-cli` is the Rust command-line client for **Vaxis**, a hosted diagram/architecture
 design SaaS (Cloudflare Workers API + D1, default host `https://app.vaxis.dev`). The CLI
-is a thin, auth-aware HTTP client — it renders nothing and runs no AI locally. Its purpose
-is to be **driven by an AI assistant (Claude)**: Claude generates Mermaid, and Vaxis
+is an auth-aware HTTP client that also embeds version-matched agent instructions. It renders
+nothing and runs no AI locally. Its purpose is to be **driven by an AI assistant**: the
+assistant generates Mermaid, and Vaxis
 persists it, auto-expands "drill" subsystems into a diagram tree, and returns a share link.
 
-The behavioral contract that tells Claude *how* to use the CLI lives in `skills/SKILL.md`.
-When you change a command's flags, output shape, or workflow, update `skills/SKILL.md` too —
-it documents exact command invocations and JSON output schemas that the assistant relies on.
+The authoritative behavioral contract lives in `skill-data/core/SKILL.md` and is embedded in
+the binary for `vaxis skills get core`. The small `skills/vaxis/SKILL.md` discovery skill is
+installed into supported agent hosts by `vaxis install --skills`. When you change command
+flags, output shapes, or workflows, update the core skill too — it documents the exact
+invocations and JSON schemas that assistants rely on.
 
 ## Build / run / release
 
@@ -20,18 +23,17 @@ it documents exact command invocations and JSON output schemas that the assistan
 cargo build --release          # binary at target/release/vaxis
 cargo run -- <args>            # e.g. cargo run -- apps list --json
 cargo run -- --help
+cargo test
 ```
 
-There is no test suite. `docs/test-commands.sh` and `docs/vaxis-cli-test-guide.md` contain
-manual end-to-end checks against a running backend.
+The Rust test suite covers CLI contracts, skill packaging and installation behavior, Mermaid
+linting, and parity evaluation. `docs/test-commands.sh` and `docs/vaxis-cli-test-guide.md`
+also contain manual end-to-end checks against a running backend.
 
 **Releasing** (see `docs/vaxis-release-guide.md`): bump the version in **both**
 `Cargo.toml` and `npm/package.json` (kept in lockstep), then tag `vX.Y.Z` and push.
 CI (`.github/workflows/npm-publish.yml`) cross-compiles 6 targets to a GitHub Release and
 publishes `@unwita-insights/vaxis` to npm.
-
-> Note: `src/cli.rs` hardcodes `#[command(version = "0.1.0")]`, which is stale and does not
-> track the real version. Update it when touching versioning.
 
 ## Architecture
 
@@ -45,7 +47,11 @@ src/
     ├── me.rs / logout.rs
     ├── config.rs      # config set-url / show
     ├── apps.rs        # applications: list/create/update/delete/share (legacy read+revoke)
-    └── diagrams.rs    # diagrams: list/create/generate/ask/sessions/share/show/tree/undo/rename/delete/import/format
+    ├── diagrams.rs    # diagrams: list/create/generate/ask/sessions/share/show/tree/undo/rename/delete/import/format
+    └── skills.rs      # bundled skill inspection + discovery-skill installation
+
+skills/vaxis/SKILL.md          # small discovery skill installed into agent hosts
+skill-data/core/SKILL.md       # authoritative instructions embedded in the binary
 ```
 
 - **Flat command pattern.** `main.rs` matches the `Commands` enum and calls one `run()` per
@@ -101,7 +107,10 @@ src/
   message, and surfaces it as a synthetic `current_mermaid` field; it also strips `scene_json`
   (Excalidraw noise) from JSON output. Preserve both behaviors — the assistant depends on
   `current_mermaid`.
-- **`format`** makes no network call — it returns a hardcoded Mermaid reference spec.
+- **`format`** makes no network call — it returns the embedded Mermaid reference spec.
+- **Skill distribution** also makes no network call. `vaxis skills get core` prints the
+  embedded authoritative skill exactly; `vaxis install --skills` installs the small discovery
+  skill using canonical host path mappings, checksum-managed upgrades, and backup-on-force.
 
 ## Backend API surface the CLI depends on (the contract)
 
@@ -145,10 +154,10 @@ Endpoints the CLI is coupled to (backend's CURRENT paths):
   `PATCH /api/diagrams/{id}/chat/sessions/{sid}` (session rename),
   `DELETE /api/diagrams/{id}/chat/messages/last` (undo).
 
-**🔴 STRONG RULE — `skills/SKILL.md`'s diagram style-rules section (shape mapping, subgraph
+**🔴 STRONG RULE — `skill-data/core/SKILL.md`'s diagram style-rules section (shape mapping, subgraph
 coloring, fan-out cap, auto-drill threshold) is a condensed mirror of the system prompt the
-`vaxis` backend gives its own server-side AI**, so that Claude (via `diagrams generate
---mermaid`) produces visually consistent diagrams with the server-AI path (`generate
+`vaxis` backend gives its own server-side AI**, so that any driving assistant (via `diagrams
+generate --mermaid`) produces visually consistent diagrams with the server-AI path (`generate
 --prompt`). The mirrored source, in the `vaxis` repo:
 - `S_FLOWCHART_SHAPES`, `S_COLOR`, `S_OUTPUT_FLOWCHART` (fan-out cap, layout cleanliness,
   subgraph grouping syntax), `S_DRILL` in `apps/api/src/prompts.ts`.
@@ -156,16 +165,18 @@ coloring, fan-out cap, auto-drill threshold) is a condensed mirror of the system
 
 This is a **prose mirror, not shared code** — the CLI is Rust and cannot import a TS module, so
 some drift over time is expected, not a bug. If you're touching `vaxis`'s prompt/shape rules,
-flag it and update `skills/SKILL.md` here in the same change (or open a `vaxis-cli` issue). The
+flag it and update `skill-data/core/SKILL.md` here in the same change (or open a `vaxis-cli` issue). The
 mirror note on the `vaxis` side lives next to its own STRONG RULE for the endpoint contract.
 
 ## When you change things
 
 - Adding/altering a command → update `src/cli.rs`, the module in `src/commands/`, **and**
-  `skills/SKILL.md` (command reference + JSON output schema + relevant workflow).
+  `skill-data/core/SKILL.md` (command reference + JSON output schema + relevant workflow).
+- Changing skill discovery or installation behavior → update `src/commands/skills.rs`,
+  `skills/vaxis/SKILL.md`, and `docs/vaxis-skill-distribution-plan.md`.
 - Adding/removing a consumed backend endpoint → update the contract list above **and** the
   mirror list in `vaxis`'s `CLAUDE.md` (see the STRONG RULE).
-- Changing JSON output shape → grep `skills/SKILL.md` and `docs/` for the affected fields.
+- Changing JSON output shape → grep `skill-data/core/SKILL.md` and `docs/` for the affected fields.
 - The npm `package.json` repository URL currently reads `github.com/unwita/vaxis-cli`; the
   real remote is `github.com/Unwita-Insights/vaxis-cli`.
 
