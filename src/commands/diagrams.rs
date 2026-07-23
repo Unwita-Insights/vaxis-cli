@@ -1219,7 +1219,7 @@ fn contract_drift(local: &serde_json::Value, remote: &serde_json::Value) -> Vec<
         ));
     }
     let normalized_tokens = |value: &serde_json::Value| {
-        value
+        let mut tokens = value
             .as_array()
             .map(|tokens| {
                 tokens
@@ -1228,7 +1228,10 @@ fn contract_drift(local: &serde_json::Value, remote: &serde_json::Value) -> Vec<
                     .map(str::to_lowercase)
                     .collect::<Vec<_>>()
             })
-            .unwrap_or_default()
+            .unwrap_or_default();
+        tokens.sort_unstable();
+        tokens.dedup();
+        tokens
     };
     let local_tokens = normalized_tokens(&local["authoring_contract"]["shapes"]["storage_keywords"]);
     let remote_tokens = normalized_tokens(&remote["shapes"]["storage_keywords"]);
@@ -1369,14 +1372,19 @@ mod format_tests {
     #[test]
     fn detects_cross_repository_contract_drift() {
         let local = format_spec();
+        let mut reordered_tokens = local["authoring_contract"]["shapes"]["storage_keywords"]
+            .as_array()
+            .unwrap()
+            .clone();
+        reordered_tokens.reverse();
         let matching = serde_json::json!({
             "schema_version": "1.1.0",
-            "shapes": { "storage_keywords": local["authoring_contract"]["shapes"]["storage_keywords"] },
+            "shapes": { "storage_keywords": reordered_tokens },
             "drills": { "seeded_min_nodes": 3 }
         });
         assert!(
             contract_drift(&local, &matching).is_empty(),
-            "additive versions within the supported major must remain compatible"
+            "compatible versions and keyword reorderings must not report drift"
         );
         let stale = serde_json::json!({
             "schema_version": "2.0.0",
