@@ -11,7 +11,7 @@ npm install -g @unwita-insights/vaxis
 vaxis install --skills
 ```
 
-`vaxis install --skills` is a planned command and must be implemented.
+The CLI implements this command and bundles both skill files at build time.
 
 ## How It Works
 
@@ -29,7 +29,7 @@ vaxis install --skills
 
 No internet download is required to load the core skill.
 
-## Planned Repository Structure
+## Repository Structure
 
 ```text
 skills/
@@ -41,11 +41,11 @@ skill-data/
     `-- SKILL.md          # Complete Vaxis instructions
 ```
 
-Move the current long `skills/SKILL.md` to `skill-data/core/SKILL.md`.
+The complete instructions live at `skill-data/core/SKILL.md`.
 
 ## Discovery Skill
 
-Create `skills/vaxis/SKILL.md`:
+The discovery skill lives at `skills/vaxis/SKILL.md`:
 
 ```md
 ---
@@ -66,7 +66,7 @@ Do not generate or modify a diagram before loading the core instructions.
 
 ## Full Skill Change
 
-Add YAML frontmatter to `skill-data/core/SKILL.md`:
+The full skill at `skill-data/core/SKILL.md` has this YAML frontmatter:
 
 ```yaml
 ---
@@ -77,7 +77,7 @@ description: Complete Vaxis CLI workflow and Vaxis-compatible Mermaid authoring 
 
 The remaining full instructions can stay unchanged.
 
-## CLI Commands to Implement
+## CLI Commands
 
 ```bash
 vaxis install --skills [--agent <agent>] [--project | --global] [--yes] [--force]
@@ -149,7 +149,7 @@ Embed the full skill into the Vaxis binary:
 
 ```rust
 const CORE_SKILL: &str =
-    include_str!("../skill-data/core/SKILL.md");
+    include_str!("../../skill-data/core/SKILL.md");
 ```
 
 This keeps the core instructions aligned with the installed CLI version.

@@ -446,7 +446,7 @@ mod tests {
     /// of the docs silently teaching broken syntax again.
     #[test]
     fn skill_md_drill_examples_produce_drills() {
-        let skill = include_str!("../skills/SKILL.md");
+        let skill = include_str!("../skill-data/core/SKILL.md");
         let blocks = fenced_mermaid_blocks(skill);
         // Real drill examples are flowcharts. Gating on that skips prose blocks
         // that merely mention `%% vaxis:drill` in a sentence (e.g. workflow steps).

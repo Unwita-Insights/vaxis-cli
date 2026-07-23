@@ -60,7 +60,7 @@ fn preflight_mermaid(mermaid: &str, json: bool) -> bool {
 /// First-run preference. The first time a human runs `diagrams generate` in a
 /// real terminal, ask whether diagrams should be authored by their own AI
 /// (`--mermaid`) or by Vaxis's server AI (`--prompt`), and remember the choice
-/// so the assistant can honor it (see skills/SKILL.md — "generation mode").
+/// so the assistant can honor it (see skill-data/core/SKILL.md — "generation mode").
 ///
 /// Silent no-op — never blocks — when the mode is already set, in `--json` mode,
 /// or when there is no interactive terminal (e.g. the CLI is being driven by an
@@ -1355,7 +1355,7 @@ mod format_tests {
         let spec = format_spec();
         let version = spec["schema_version"].as_str().unwrap();
         let marker = format!("<!-- vaxis-authoring-rules: {version} -->");
-        let skill = include_str!("../../skills/SKILL.md");
+        let skill = include_str!("../../skill-data/core/SKILL.md");
         assert!(
             skill.contains(&marker),
             "SKILL.md must declare the embedded format contract version"

@@ -1,3 +1,8 @@
+---
+name: vaxis-core
+description: Complete Vaxis CLI workflow and Vaxis-compatible Mermaid authoring instructions.
+---
+
 # Vaxis Skill
 
 **Model-agnostic — works with Claude, GPT, Gemini, and any LLM.**

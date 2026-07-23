@@ -4,3 +4,4 @@ pub mod logout;
 pub mod config;
 pub mod apps;
 pub mod diagrams;
+pub mod skills;
