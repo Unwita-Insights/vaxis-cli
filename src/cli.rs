@@ -100,7 +100,7 @@ pub enum Commands {
         #[arg(long)]
         skills: bool,
 
-        /// Target agent (repeat for multiple agents)
+        /// Target agent (repeatable; Codex project installs use the shared .agents path)
         #[arg(long, value_enum)]
         agent: Vec<SkillAgent>,
 
@@ -177,7 +177,7 @@ pub enum SkillsAction {
     /// List skills bundled with this CLI
     List,
 
-    /// Print a bundled skill exactly
+    /// Print a bundled skill as exact raw content
     Get {
         /// Bundled skill name
         name: String,
@@ -189,7 +189,7 @@ pub enum SkillsAction {
         name: String,
     },
 
-    /// Preview a bundled skill before installation
+    /// Preview a bundled skill (currently the same raw content as get)
     Preview {
         /// Bundled skill name
         name: String,

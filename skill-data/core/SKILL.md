@@ -195,6 +195,27 @@ Exception: **Whole-canvas transform** ("turn this into a hospital system") → t
 
 All commands support `--json` for machine-readable output. Always use `--json` when reading output to make decisions.
 
+### Skills
+
+```bash
+# Install the discovery skill (interactive by default)
+vaxis install --skills
+
+# Scripted project install for Codex
+vaxis install --skills --agent codex --project --yes --json
+
+# Inspect the version-matched instructions embedded in this CLI
+vaxis skills list --json
+vaxis skills path core --json
+vaxis skills get core
+vaxis skills preview core
+```
+
+`--json` never prompts. Missing install selections and unknown skill names return
+`{"error":"<stable_code>","message":"<details>"}` with exit status `1`. `get core` prints the
+exact raw embedded content; `preview core` currently prints the same content for explicit
+human inspection. Codex project installs use the shared `.agents/skills/vaxis/SKILL.md` path.
+
 ### Applications
 
 ```bash

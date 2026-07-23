@@ -1,4 +1,5 @@
 use crate::cli::{SkillAgent, SkillsAction};
+use colored::Colorize;
 use dialoguer::{Confirm, MultiSelect, Select};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -84,12 +85,12 @@ pub fn run(action: SkillsAction, json: bool) {
             }
         }
         SkillsAction::Get { name } => {
-            require_core(&name);
+            require_core(&name, json);
             print!("{CORE_SKILL}");
             io::stdout().flush().ok();
         }
         SkillsAction::Path { name } => {
-            require_core(&name);
+            require_core(&name, json);
             if json {
                 println!(
                     "{}",
@@ -100,7 +101,7 @@ pub fn run(action: SkillsAction, json: bool) {
             }
         }
         SkillsAction::Preview { name } => {
-            require_core(&name);
+            require_core(&name, json);
             print!("{CORE_SKILL}");
             io::stdout().flush().ok();
         }
@@ -117,24 +118,21 @@ pub fn install(
     json: bool,
 ) {
     if !skills {
-        fail("nothing selected; use `vaxis install --skills`");
+        fail(
+            "invalid_arguments",
+            "nothing selected; use `vaxis install --skills`",
+            json,
+        );
     }
 
-    let interactive = !yes && io::stdin().is_terminal() && io::stdout().is_terminal();
-    let agents = select_agents(requested_agents, yes, interactive);
-    let scope = select_scope(project, global, yes, interactive);
-    let mut seen_paths = HashSet::new();
+    let interactive =
+        !json && !yes && io::stdin().is_terminal() && io::stdout().is_terminal();
+    let agents = select_agents(requested_agents, yes, interactive, json);
+    let scope = select_scope(project, global, yes, interactive, json);
     let mut results = Vec::new();
     let mut had_errors = false;
 
-    for agent in agents {
-        let spec = agent_spec(agent);
-        let path = install_path(spec, scope);
-        let path_key = path.to_string_lossy().to_lowercase();
-        if !seen_paths.insert(path_key) {
-            continue;
-        }
-
+    for (spec, path) in resolved_targets(&agents, scope, json) {
         match install_one(&path, force, interactive) {
             Ok((status, backup)) => results.push(InstallResult {
                 agent: spec.id.as_str(),
@@ -182,9 +180,13 @@ fn embedded_source() -> String {
     format!("embedded:v{}/core", env!("CARGO_PKG_VERSION"))
 }
 
-fn require_core(name: &str) {
+fn require_core(name: &str, json: bool) {
     if name != "core" {
-        fail(&format!("unknown bundled skill `{name}`; available skill: core"));
+        fail(
+            "unknown_skill",
+            &format!("unknown bundled skill `{name}`; available skill: core"),
+            json,
+        );
     }
 }
 
@@ -192,6 +194,7 @@ fn select_agents(
     requested: Vec<SkillAgent>,
     yes: bool,
     interactive: bool,
+    json: bool,
 ) -> Vec<SkillAgent> {
     if !requested.is_empty() {
         let mut unique = Vec::new();
@@ -206,7 +209,11 @@ fn select_agents(
         return AGENTS.iter().map(|spec| spec.id).collect();
     }
     if !interactive {
-        fail("select at least one `--agent`, or use `--yes` for all supported agents");
+        fail(
+            "invalid_arguments",
+            "select at least one `--agent`, or use `--yes` for all supported agents",
+            json,
+        );
     }
 
     let labels: Vec<_> = AGENTS.iter().map(|spec| spec.display_name).collect();
@@ -214,14 +221,26 @@ fn select_agents(
         .with_prompt("Install the Vaxis skill for")
         .items(&labels)
         .interact()
-        .unwrap_or_else(|error| fail(&format!("could not read agent selection: {error}")));
+        .unwrap_or_else(|error| {
+            fail(
+                "interactive_error",
+                &format!("could not read agent selection: {error}"),
+                json,
+            )
+        });
     if selected.is_empty() {
-        fail("no agents selected");
+        fail("invalid_arguments", "no agents selected", json);
     }
     selected.into_iter().map(|index| AGENTS[index].id).collect()
 }
 
-fn select_scope(project: bool, global: bool, yes: bool, interactive: bool) -> InstallScope {
+fn select_scope(
+    project: bool,
+    global: bool,
+    yes: bool,
+    interactive: bool,
+    json: bool,
+) -> InstallScope {
     if project {
         return InstallScope::Project;
     }
@@ -232,7 +251,11 @@ fn select_scope(project: bool, global: bool, yes: bool, interactive: bool) -> In
         return InstallScope::Project;
     }
     if !interactive {
-        fail("select `--project` or `--global`, or use `--yes` for project scope");
+        fail(
+            "invalid_arguments",
+            "select `--project` or `--global`, or use `--yes` for project scope",
+            json,
+        );
     }
 
     match Select::new()
@@ -240,7 +263,13 @@ fn select_scope(project: bool, global: bool, yes: bool, interactive: bool) -> In
         .items(&["Current project", "Current user (global)"])
         .default(0)
         .interact()
-        .unwrap_or_else(|error| fail(&format!("could not read scope selection: {error}")))
+        .unwrap_or_else(|error| {
+            fail(
+                "interactive_error",
+                &format!("could not read scope selection: {error}"),
+                json,
+            )
+        })
     {
         0 => InstallScope::Project,
         _ => InstallScope::Global,
@@ -254,15 +283,45 @@ fn agent_spec(agent: SkillAgent) -> &'static AgentSpec {
         .expect("every SkillAgent must have one canonical mapping")
 }
 
-fn install_path(spec: &AgentSpec, scope: InstallScope) -> PathBuf {
+fn install_path(spec: &AgentSpec, scope: InstallScope, json: bool) -> PathBuf {
     match scope {
         InstallScope::Project => std::env::current_dir()
-            .expect("cannot resolve current directory")
+            .unwrap_or_else(|error| {
+                fail(
+                    "path_resolution_failed",
+                    &format!("cannot resolve current directory: {error}"),
+                    json,
+                )
+            })
             .join(spec.project_path),
         InstallScope::Global => dirs::home_dir()
-            .unwrap_or_else(|| fail("cannot resolve the current user's home directory"))
+            .unwrap_or_else(|| {
+                fail(
+                    "path_resolution_failed",
+                    "cannot resolve the current user's home directory",
+                    json,
+                )
+            })
             .join(spec.global_path),
     }
+}
+
+fn resolved_targets(
+    agents: &[SkillAgent],
+    scope: InstallScope,
+    json: bool,
+) -> Vec<(&'static AgentSpec, PathBuf)> {
+    let mut seen_paths = HashSet::new();
+    let mut targets = Vec::new();
+    for agent in agents {
+        let spec = agent_spec(*agent);
+        let path = install_path(spec, scope, json);
+        let path_key = path.to_string_lossy().to_lowercase();
+        if seen_paths.insert(path_key) {
+            targets.push((spec, path));
+        }
+    }
+    targets
 }
 
 fn install_one(
@@ -354,8 +413,18 @@ fn sha256(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn fail(message: &str) -> ! {
-    eprintln!("Error: {message}");
+fn fail(code: &str, message: &str, json: bool) -> ! {
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "error": code,
+                "message": message,
+            })
+        );
+    } else {
+        eprintln!("{} {message}", "✗".red().bold());
+    }
     std::process::exit(1);
 }
 
@@ -440,5 +509,43 @@ mod tests {
         assert_eq!(fs::read_to_string(backup).unwrap(), "user changes");
         assert_eq!(fs::read_to_string(&path).unwrap(), DISCOVERY_SKILL);
         fs::remove_dir_all(parent.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn managed_skill_is_upgraded_when_stored_checksum_matches() {
+        let path = temporary_skill_path("managed-upgrade");
+        let parent = path.parent().unwrap();
+        fs::create_dir_all(parent).unwrap();
+        let old_skill = "previous Vaxis discovery skill";
+        fs::write(&path, old_skill).unwrap();
+        fs::write(parent.join(CHECKSUM_FILE), sha256(old_skill.as_bytes())).unwrap();
+
+        let upgraded = install_one(&path, false, false).unwrap();
+        assert_eq!(upgraded.0, "upgraded");
+        assert!(upgraded.1.is_none());
+        assert_eq!(fs::read_to_string(&path).unwrap(), DISCOVERY_SKILL);
+        fs::remove_dir_all(parent.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn duplicate_project_destinations_are_suppressed() {
+        let targets = resolved_targets(
+            &[SkillAgent::Agents, SkillAgent::Codex],
+            InstallScope::Project,
+            false,
+        );
+        assert_eq!(targets.len(), 1);
+        assert!(targets[0]
+            .1
+            .ends_with(".agents/skills/vaxis/SKILL.md"));
+    }
+
+    #[test]
+    fn project_and_global_scopes_use_canonical_paths() {
+        let codex = agent_spec(SkillAgent::Codex);
+        assert!(install_path(codex, InstallScope::Project, false)
+            .ends_with(".agents/skills/vaxis/SKILL.md"));
+        assert!(install_path(codex, InstallScope::Global, false)
+            .ends_with(".codex/skills/vaxis/SKILL.md"));
     }
 }

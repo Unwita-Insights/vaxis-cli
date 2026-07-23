@@ -95,9 +95,15 @@ vaxis skills preview core
 - `skills list`: List only the skills bundled with the installed CLI. `--json` provides stable structured output.
 - `skills get core`: Print the embedded `SKILL.md` exactly, without decoration or network access.
 - `skills path core`: Print `embedded:<binary-version>/core` when served from the binary, or the effective filesystem path if the skill is extracted.
-- `skills preview core`: Display the bundled skill for inspection without installing or activating it.
+- `skills preview core`: Display the bundled skill for human inspection without installing or activating it. It currently returns the same raw content as `get`; the separate command preserves a future human-facing preview surface.
 
-When flags provide all required choices, installation must be non-interactive and suitable for scripts and CI.
+When flags provide all required choices, installation must be non-interactive and suitable for scripts and CI. `--json` always disables prompts; missing selections return a structured error and a non-zero exit status.
+
+JSON failures use:
+
+```json
+{"error": "stable_error_code", "message": "Human-readable details"}
+```
 
 ## Skill Installation Locations
 
@@ -107,6 +113,10 @@ Project scope:
 .agents/skills/vaxis/SKILL.md
 .claude/skills/vaxis/SKILL.md
 ```
+
+Codex uses the shared `.agents/skills/vaxis/SKILL.md` project path, so selecting both
+`--agent agents` and `--agent codex` at project scope intentionally writes one deduplicated
+file.
 
 User/global scope:
 
