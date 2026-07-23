@@ -1,5 +1,7 @@
 # Vaxis Skill
 
+**Model-agnostic — works with Claude, GPT, Gemini, and any LLM.**
+
 ## When to use Vaxis
 
 Use Vaxis whenever the user asks to:
@@ -39,16 +41,148 @@ vaxis config show --json
 
 Look at the `generation_mode` field (may be `null`) and honor it:
 
-- **`"generation_mode": "mermaid"`** (or `null` / unavailable) — **you** write the Mermaid
-  and pass it with `--mermaid`. This is the default and preferred flow: no server-AI
-  call, instant, deterministic, and drills are parsed from your `%% vaxis:drill` markers.
-- **`"generation_mode": "prompt"`** — the user wants **Vaxis's own server AI** to generate.
+- **`"generation_mode": "mermaid"`** (or `null` / unavailable) — **you** (the AI assistant)
+  write the Mermaid code and pass it with `--mermaid`. This is the default and preferred
+  flow: works with any LLM (Claude, GPT, Gemini, etc.), instant, deterministic, and drills
+  are parsed from your `%% vaxis:drill` markers. You follow the **diagram generation rules**
+  (model-independent) to structure the diagram correctly.
+
+- **`"generation_mode": "prompt"`** — **Vaxis server AI** generates the diagram.
   Send the user's request with `--prompt` instead of writing the Mermaid yourself:
   `vaxis diagrams generate <id> --prompt "<the user's description>"`. This path supports
-  `--intent` / `--session` and is subject to server-AI rate limits.
+  `--intent` / `--session` and is subject to server-AI rate limits. The server uses its own
+  internal generation logic.
 
 Treat `null`/unset as `mermaid`. You never need to prompt the user for this — the CLI asks
 them once, on their first interactive `diagrams generate`, and remembers the answer.
+
+### Diagram Generation Rules
+
+When generating Mermaid with `--mermaid`, follow the **universal diagram rules** below.
+These rules work identically for any LLM — the structure and logic are model-independent.
+The key is consistent application of shapes, hierarchy, and topology, not model-specific
+features.
+
+---
+
+## Multi-LLM Compatibility
+
+This skill is **model-agnostic** and works identically with:
+- **Claude** (Haiku, Sonnet, Opus)
+- **GPT-4 / GPT-4o** (OpenAI)
+- **Gemini** (Google)
+- **Any other LLM** (Llama, Mistral, etc.)
+
+The diagram generation **rules are universal** — not specific to any model. What matters is
+consistent application of shapes, hierarchy, topology, and preservation rules. The LLM's role
+is to follow these rules when generating Mermaid code; the structure is the same regardless
+of which model does the work.
+
+If you need model-specific tuning (context windows, token budgets, API patterns), handle that
+in your model's **own system prompt** — this skill stays pure to the diagram authoring contract.
+
+When writing Mermaid with `--mermaid`, follow these core rules. They are model-independent
+and work identically for Claude, GPT, Gemini, or any LLM. The structure and logic are what
+matter, not which AI generates them.
+
+### 1. Domain Detection
+Classify the diagram as **SOFTWARE** or **NON-SOFTWARE** before generating:
+
+**SOFTWARE signals:** API, backend, frontend, microservice, service, server, client, web app, database, DB, Postgres, cache, queue, Kafka, SQS, S3, Docker, Lambda, OAuth, JWT, REST, GraphQL, gRPC, or any tech stack.
+
+**NON-SOFTWARE signals:** biology, anatomy, ecosystems, animals, plants, recipes, org charts, family trees, history, art, geography, sports plays, education.
+
+- **In SOFTWARE diagrams:** use tech vocabulary freely (Service, API, Gateway, Database, Cache, Queue). Shapes are strict: rectangles for services/gateways, **cylinders for storage**, **rhombus for yes/no decisions only**.
+- **In NON-SOFTWARE diagrams:** use natural domain terms (Species, Habitat, Migration — NOT "Species Identifier", "Habitat Module", "Migration Tracker"). Mostly rectangles; minimal shape variety.
+
+### 2. Shape Mapping (Software Diagrams Only)
+
+| Label contains | Shape | Syntax |
+|---|---|---|
+| `db`, `database`, `cache`, `queue`, `store`, `storage`, `bucket`, `kafka`, `redis`, `postgres`, `mongo`, `mysql`, `kv`, `r2`, `d1`, `table`, `log`, etc. (case-insensitive) | **Cylinder** | `nodeId[("Label")]` |
+| Ends with `?` (yes/no branch) | **Rhombus** | `nodeId{"Question?"}` |
+| Everything else (services, APIs, gateways, UIs, load balancers, handlers) | **Rectangle** | `nodeId["Label"]` |
+
+**Self-check before returning:** every storage label → cylinder; every `?` label → rhombus; a software diagram with persistence has ≥1 cylinder; a branching flow has ≥1 rhombus.
+
+### 3. Richness to Intent
+
+- **Bare object** ("add a laptop") → emit exactly that node, no invented neighbors.
+- **Integration/Implementation** ("add Supabase with OAuth", "implement Stripe") → expand into real sub-components and edges. Supabase = Postgres + Auth + Storage + Realtime + Edge Functions + APIs. Stripe = Checkout + Webhooks + Billing + Customer store. One-box answers are **wrong**.
+- **Open exploration** ("design an e-commerce backend") → produce a coherent multi-component architecture.
+- **Named real tools:** use your knowledge of how they actually work internally, not generic placeholders.
+
+### 4. Flowchart Direction
+
+- **`flowchart LR`** — genuine sequences: pipelines, processes, lifecycles, step-by-step chains (grind → brew → pour; ingest → transform → load).
+- **`flowchart TB`** — layered architectures and hierarchies (clients → services → data).
+- **Explicit user request always wins.** When editing, preserve the existing direction unless the user asks to change it.
+
+### 5. Hierarchy via Drilling (THE Core Feature)
+
+**Emit drill blocks when:**
+- User explicitly asks: "deep dive into X", "show internals of X", "expand X".
+- The node genuinely hides real structure (a "Payments" service containing 5+ sub-services).
+- **Production-system request** ("production-grade architecture", "end-to-end system") → drill 3–6 composite services, skip leaf nodes.
+- **System default:** any fresh SOFTWARE system with 4+ composite services gets a drill per composite.
+- **Canvas overflow:** content doesn't fit one readable diagram → restructure into main + drills.
+
+**Never drill:** tiny diagrams, deliberately small asks, atomic nodes (single DB, cache, queue, UI screen, external API).
+
+**Format (at column 0, after complete main diagram):**
+```
+graph TD
+  api["API Gateway"]
+  auth["Auth Service"]
+  api --> auth
+
+%% vaxis:drill auth
+flowchart TB
+  login["Login"]
+  tokenMgr["Token Manager"]
+  login --> tokenMgr
+```
+
+**Three rules (break any one and drills silently fail):**
+1. **Column 0, no indentation.** `%% vaxis:drill <nodeId>` at the very start of its line.
+2. **After the complete main diagram, never between nodes.** Everything before the first marker is the main diagram.
+3. **`<nodeId>` must exist in the main diagram.** Exact ID match required.
+
+### 6. Fan-Out Cap & DAG Topology
+
+- **Max ~4 connections per node** (in + out combined). A hub with 5+ spokes renders as a tangled star.
+- **Route extras through the layer that owns them:** instead of `orderService` → [payment, db, notification, merchant, dispatch], do `orderService` → `eventQueue` (one fan-out point), then `eventQueue` → [notification, merchant, dispatch]. Keep `orderService` → [payment, db] direct.
+- **Prefer layered DAG:** clear tiers (UI → services → data), edges flowing primarily one direction.
+
+### 7. Preservation on Edit (Critical)
+
+When editing an existing diagram:
+- **Read `current_mermaid` first.** Never overwrite blindly.
+- **Keep EVERY existing node and edge unchanged** unless the user explicitly asked to remove them.
+- **Only add/modify what was requested.** Silently dropping a node = silent deletion.
+- **Copy each node's ID and shape syntax verbatim** — don't reshape an untouched node.
+- **Keep the flowchart direction (TB/LR)** unless the user asks to change it.
+
+Exception: **Whole-canvas transform** ("turn this into a hospital system") → the old content is replaced; re-derive the new system at full richness as if starting from scratch.
+
+### 8. Color & Subgraphs
+
+- Use `subgraph`blocks to group related nodes — **this is what produces colored groups in Vaxis**.
+- Keep subgraphs **flat** (never nested); Vaxis auto-assigns distinct soft colors.
+- Optional `style <subgraphId> fill:#color,stroke:#color` — helpful for non-Vaxis viewers, Vaxis overrides it with its own palette.
+- Prefer semantic grouping (Backend, Frontend, Data, Infrastructure) over color decoration.
+
+### 9. Node Labels & IDs
+
+- **Labels:** concise (2–5 words), title case, readable on screen.
+- **IDs:** camelCase or snake_case, alphanumeric + underscores only, no spaces.
+- Keep IDs short (1–3 words) — they become child diagram names.
+
+### 10. Limits
+
+- **50 nodes, 60 edges per diagram** (hard ceiling).
+- Don't design *to* the limit — structure as a hierarchy. Keep the root readable (~10 major nodes), push detail into drill children.
+- For small edits to large diagrams: read `current_mermaid`, preserve every node, resend the full diagram (Workflow 14).
 
 ---
 
@@ -174,7 +308,7 @@ vaxis diagrams import <diagramId> --mermaid "graph TD\n    A[User] --> B[API]" -
    → Save the returned id as ROOT_ID
 
 4. If the description is too thin to draw accurately, clarify FIRST (Rule 17):
-   → Ask 2–4 focused questions with selectable options (Claude Code: AskUserQuestion)
+   → Ask 2–4 focused questions with selectable options (use your environment's UI if available)
      — main components? what connects to what? datastore? external services?
    → Skip this when the description is already specific enough to draw something useful.
 
@@ -1011,7 +1145,7 @@ input or file errors.
 
 17. **Clarify before drawing from a thin description — ask with options, not free text.** When a diagram request lacks the detail needed for an accurate result (e.g. "draw my app" with no components, stack, or data flow named), gather what's missing **before** generating:
     - Ask a focused batch of clarifying questions (2–4) covering the key unknowns: the main components/services, what connects to what, datastores, and external services (Stripe, S3, auth provider…).
-    - **Present them as structured multiple-choice questions with selectable options — not free text — whenever your tools allow it.** In Claude Code, use the **`AskUserQuestion`** tool (2–4 concrete options per question, multi-select where several apply, and always offer an "Other" escape). If your environment has no such tool, ask the same questions concisely in text.
+    - **Present them as structured multiple-choice questions with selectable options — not free text — whenever your environment allows it.** If your platform has a structured question/selection UI, use it (e.g., Claude Code's AskUserQuestion, specialized chat interfaces). If not, ask the same questions concisely in text.
     - Generate the diagram from the answers.
 
     Don't over-ask: if the request is already specific enough to draw something useful, draw it and offer to refine. One good round of option-based questions beats a vague diagram the user has to fix. (Consistent with Rule 12 — a focused round, never an endless back-and-forth.) This applies to the `--mermaid` path where you author the diagram; on `--prompt`, Vaxis's server AI handles the request directly.
