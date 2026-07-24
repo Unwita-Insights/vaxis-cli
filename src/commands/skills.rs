@@ -153,8 +153,9 @@ pub fn install(
     let mut results = Vec::new();
     let mut had_errors = false;
 
+    let managed_root = install_root(scope, json);
     for (spec, path) in resolved_targets(&agents, scope, json) {
-        match install_one(&path, force, interactive) {
+        match install_one(&path, &managed_root, force, interactive) {
             Ok((status, backup)) => results.push(InstallResult {
                 agent: spec.id.as_str(),
                 path: path.display().to_string(),
@@ -321,25 +322,29 @@ fn agent_spec(agent: SkillAgent) -> &'static AgentSpec {
 }
 
 fn install_path(spec: &AgentSpec, scope: InstallScope, json: bool) -> PathBuf {
+    let root = install_root(scope, json);
     match scope {
-        InstallScope::Project => std::env::current_dir()
-            .unwrap_or_else(|error| {
-                fail(
-                    "path_resolution_failed",
-                    &format!("cannot resolve current directory: {error}"),
-                    json,
-                )
-            })
-            .join(spec.project_path),
-        InstallScope::Global => dirs::home_dir()
-            .unwrap_or_else(|| {
-                fail(
-                    "path_resolution_failed",
-                    "cannot resolve the current user's home directory",
-                    json,
-                )
-            })
-            .join(spec.global_path),
+        InstallScope::Project => root.join(spec.project_path),
+        InstallScope::Global => root.join(spec.global_path),
+    }
+}
+
+fn install_root(scope: InstallScope, json: bool) -> PathBuf {
+    match scope {
+        InstallScope::Project => std::env::current_dir().unwrap_or_else(|error| {
+            fail(
+                "path_resolution_failed",
+                &format!("cannot resolve current directory: {error}"),
+                json,
+            )
+        }),
+        InstallScope::Global => dirs::home_dir().unwrap_or_else(|| {
+            fail(
+                "path_resolution_failed",
+                "cannot resolve the current user's home directory",
+                json,
+            )
+        }),
     }
 }
 
@@ -363,11 +368,13 @@ fn resolved_targets(
 
 fn install_one(
     destination: &Path,
+    managed_root: &Path,
     force: bool,
     interactive: bool,
 ) -> Result<(&'static str, Option<PathBuf>), String> {
     install_one_with_legacy_checksums(
         destination,
+        managed_root,
         force,
         interactive,
         LEGACY_MANAGED_SKILL_CHECKSUMS,
@@ -376,21 +383,25 @@ fn install_one(
 
 fn install_one_with_legacy_checksums(
     destination: &Path,
+    managed_root: &Path,
     force: bool,
     interactive: bool,
     legacy_checksums: &[&str],
 ) -> Result<(&'static str, Option<PathBuf>), String> {
+    validate_install_path(managed_root, destination)?;
     let parent = destination
         .parent()
         .ok_or_else(|| format!("invalid skill destination: {}", destination.display()))?;
     fs::create_dir_all(parent)
         .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    validate_write_target(managed_root, destination)?;
 
     let new_checksum = sha256(DISCOVERY_SKILL.as_bytes());
     let checksum_path = parent.join(CHECKSUM_FILE);
+    validate_write_target(managed_root, &checksum_path)?;
 
     if !destination.exists() {
-        write_skill(destination, &checksum_path, &new_checksum)?;
+        write_skill(destination, &checksum_path, &new_checksum, managed_root)?;
         return Ok(("installed", None));
     }
 
@@ -398,6 +409,7 @@ fn install_one_with_legacy_checksums(
         .map_err(|error| format!("cannot read {}: {error}", destination.display()))?;
     let existing_checksum = sha256(&existing);
     if existing_checksum == new_checksum {
+        validate_write_target(managed_root, &checksum_path)?;
         fs::write(&checksum_path, &new_checksum)
             .map_err(|error| format!("cannot write {}: {error}", checksum_path.display()))?;
         return Ok(("unchanged", None));
@@ -407,13 +419,13 @@ fn install_one_with_legacy_checksums(
         .ok()
         .map(|value| value.trim().to_owned());
     if managed_checksum.as_deref() == Some(existing_checksum.as_str()) {
-        write_skill(destination, &checksum_path, &new_checksum)?;
+        write_skill(destination, &checksum_path, &new_checksum, managed_root)?;
         return Ok(("upgraded", None));
     }
 
     if legacy_checksums.contains(&existing_checksum.as_str()) {
-        let backup = back_up_skill(destination)?;
-        write_skill(destination, &checksum_path, &new_checksum)?;
+        let backup = back_up_skill(destination, managed_root)?;
+        write_skill(destination, &checksum_path, &new_checksum, managed_root)?;
         return Ok(("migrated", Some(backup)));
     }
 
@@ -438,14 +450,81 @@ fn install_one_with_legacy_checksums(
         ));
     }
 
-    let backup = back_up_skill(destination)?;
-    write_skill(destination, &checksum_path, &new_checksum)?;
+    let backup = back_up_skill(destination, managed_root)?;
+    write_skill(destination, &checksum_path, &new_checksum, managed_root)?;
     Ok(("replaced", Some(backup)))
 }
 
-fn write_skill(destination: &Path, checksum_path: &Path, checksum: &str) -> Result<(), String> {
+fn validate_install_path(managed_root: &Path, destination: &Path) -> Result<(), String> {
+    let relative = destination.strip_prefix(managed_root).map_err(|_| {
+        format!(
+            "refusing to write outside managed root {}: {}",
+            managed_root.display(),
+            destination.display()
+        )
+    })?;
+
+    let mut current = managed_root.to_path_buf();
+    for component in relative.components() {
+        use std::path::Component;
+        let Component::Normal(component) = component else {
+            return Err(format!(
+                "refusing unsafe install path: {}",
+                destination.display()
+            ));
+        };
+        current.push(component);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!(
+                    "refusing to write through symlink: {}",
+                    current.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!("cannot inspect {}: {error}", current.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ensure_parent_within_root(managed_root: &Path, parent: &Path) -> Result<(), String> {
+    let canonical_root = fs::canonicalize(managed_root)
+        .map_err(|error| format!("cannot resolve {}: {error}", managed_root.display()))?;
+    let canonical_parent = fs::canonicalize(parent)
+        .map_err(|error| format!("cannot resolve {}: {error}", parent.display()))?;
+    if !canonical_parent.starts_with(&canonical_root) {
+        return Err(format!(
+            "refusing to write outside managed root {}: {}",
+            canonical_root.display(),
+            canonical_parent.display()
+        ));
+    }
+    Ok(())
+}
+
+fn validate_write_target(managed_root: &Path, target: &Path) -> Result<(), String> {
+    validate_install_path(managed_root, target)?;
+    let parent = target
+        .parent()
+        .ok_or_else(|| format!("invalid skill destination: {}", target.display()))?;
+    ensure_parent_within_root(managed_root, parent)
+}
+
+fn write_skill(
+    destination: &Path,
+    checksum_path: &Path,
+    checksum: &str,
+    managed_root: &Path,
+) -> Result<(), String> {
+    validate_write_target(managed_root, destination)?;
+    validate_write_target(managed_root, checksum_path)?;
     fs::write(destination, DISCOVERY_SKILL)
         .map_err(|error| format!("cannot write {}: {error}", destination.display()))?;
+    validate_write_target(managed_root, checksum_path)?;
     fs::write(checksum_path, checksum)
         .map_err(|error| format!("cannot write {}: {error}", checksum_path.display()))
 }
@@ -458,8 +537,10 @@ fn backup_path(destination: &Path) -> PathBuf {
     destination.with_file_name(format!("SKILL.md.{timestamp}.bak"))
 }
 
-fn back_up_skill(destination: &Path) -> Result<PathBuf, String> {
+fn back_up_skill(destination: &Path, managed_root: &Path) -> Result<PathBuf, String> {
     let backup = backup_path(destination);
+    validate_write_target(managed_root, destination)?;
+    validate_write_target(managed_root, &backup)?;
     fs::copy(destination, &backup).map_err(|error| {
         format!(
             "cannot back up {} to {}: {error}",
@@ -505,6 +586,10 @@ mod tests {
             .join("SKILL.md")
     }
 
+    fn managed_root(path: &Path) -> &Path {
+        path.parent().unwrap().parent().unwrap()
+    }
+
     #[test]
     fn embedded_skills_have_required_frontmatter() {
         for (name, content) in [("core", CORE_SKILL), ("discovery", DISCOVERY_SKILL)] {
@@ -519,6 +604,20 @@ mod tests {
                 content[4..].contains("\n---\n"),
                 "{name} skill has no closing frontmatter delimiter"
             );
+        }
+    }
+
+    #[test]
+    fn destructive_core_skill_commands_use_json() {
+        for (index, line) in CORE_SKILL.lines().enumerate() {
+            if line.contains("vaxis ") && line.contains(" delete ") {
+                assert!(
+                    line.contains("--json"),
+                    "destructive command on core skill line {} must use --json: {}",
+                    index + 1,
+                    line
+                );
+            }
         }
     }
 
@@ -545,7 +644,7 @@ mod tests {
         let path = temporary_skill_path("idempotent");
         let parent = path.parent().unwrap();
 
-        let first = install_one(&path, false, false).unwrap();
+        let first = install_one(&path, managed_root(&path), false, false).unwrap();
         assert_eq!(first.0, "installed");
         assert_eq!(fs::read_to_string(&path).unwrap(), DISCOVERY_SKILL);
         assert_eq!(
@@ -553,7 +652,7 @@ mod tests {
             sha256(DISCOVERY_SKILL.as_bytes())
         );
 
-        let second = install_one(&path, false, false).unwrap();
+        let second = install_one(&path, managed_root(&path), false, false).unwrap();
         assert_eq!(second.0, "unchanged");
         fs::remove_dir_all(parent.parent().unwrap()).unwrap();
     }
@@ -562,11 +661,11 @@ mod tests {
     fn modified_skill_requires_force_and_is_backed_up() {
         let path = temporary_skill_path("force");
         let parent = path.parent().unwrap();
-        install_one(&path, false, false).unwrap();
+        install_one(&path, managed_root(&path), false, false).unwrap();
         fs::write(&path, "user changes").unwrap();
 
-        assert!(install_one(&path, false, false).is_err());
-        let replaced = install_one(&path, true, false).unwrap();
+        assert!(install_one(&path, managed_root(&path), false, false).is_err());
+        let replaced = install_one(&path, managed_root(&path), true, false).unwrap();
         assert_eq!(replaced.0, "replaced");
         let backup = replaced.1.expect("forced replacement must create a backup");
         assert_eq!(fs::read_to_string(backup).unwrap(), "user changes");
@@ -583,7 +682,7 @@ mod tests {
         fs::write(&path, old_skill).unwrap();
         fs::write(parent.join(CHECKSUM_FILE), sha256(old_skill.as_bytes())).unwrap();
 
-        let upgraded = install_one(&path, false, false).unwrap();
+        let upgraded = install_one(&path, managed_root(&path), false, false).unwrap();
         assert_eq!(upgraded.0, "upgraded");
         assert!(upgraded.1.is_none());
         assert_eq!(fs::read_to_string(&path).unwrap(), DISCOVERY_SKILL);
@@ -600,7 +699,14 @@ mod tests {
         let legacy_checksum = sha256(legacy_skill.as_bytes());
 
         let migrated =
-            install_one_with_legacy_checksums(&path, false, false, &[&legacy_checksum]).unwrap();
+            install_one_with_legacy_checksums(
+                &path,
+                managed_root(&path),
+                false,
+                false,
+                &[&legacy_checksum],
+            )
+            .unwrap();
 
         assert_eq!(migrated.0, "migrated");
         let backup = migrated.1.expect("legacy migration must create a backup");
@@ -611,6 +717,98 @@ mod tests {
             sha256(DISCOVERY_SKILL.as_bytes())
         );
         fs::remove_dir_all(parent.parent().unwrap()).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn create_file_symlink(target: &Path, link: &Path) -> io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn create_file_symlink(target: &Path, link: &Path) -> io::Result<()> {
+        std::os::windows::fs::symlink_file(target, link)
+    }
+
+    #[cfg(unix)]
+    fn create_dir_symlink(target: &Path, link: &Path) -> io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn create_dir_symlink(target: &Path, link: &Path) -> io::Result<()> {
+        std::os::windows::fs::symlink_dir(target, link)
+    }
+
+    #[cfg(unix)]
+    fn remove_dir_symlink(link: &Path) -> io::Result<()> {
+        fs::remove_file(link)
+    }
+
+    #[cfg(windows)]
+    fn remove_dir_symlink(link: &Path) -> io::Result<()> {
+        fs::remove_dir(link)
+    }
+
+    #[cfg(any(unix, windows))]
+    fn symlink_created(result: io::Result<()>) -> bool {
+        match result {
+            Ok(()) => true,
+            #[cfg(windows)]
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => false,
+            Err(error) => panic!("could not create test symlink: {error}"),
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn symlinked_destination_is_rejected_without_touching_target() {
+        let path = temporary_skill_path("destination-symlink");
+        let root = managed_root(&path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let external = root.with_file_name(format!(
+            "vaxis-skills-external-{}",
+            std::process::id()
+        ));
+        fs::write(&external, "external content").unwrap();
+        if !symlink_created(create_file_symlink(&external, &path)) {
+            fs::remove_file(&external).unwrap();
+            fs::remove_dir_all(root).unwrap();
+            return;
+        }
+
+        let error = install_one(&path, root, true, false).unwrap_err();
+        assert!(error.contains("symlink"));
+        assert_eq!(fs::read_to_string(&external).unwrap(), "external content");
+
+        fs::remove_file(&path).unwrap();
+        fs::remove_file(&external).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn symlinked_parent_is_rejected_without_writing_outside_root() {
+        let path = temporary_skill_path("parent-symlink");
+        let root = managed_root(&path);
+        fs::create_dir_all(root).unwrap();
+        let external = root.with_file_name(format!(
+            "vaxis-skills-external-dir-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&external).unwrap();
+        if !symlink_created(create_dir_symlink(&external, path.parent().unwrap())) {
+            fs::remove_dir_all(&external).unwrap();
+            fs::remove_dir_all(root).unwrap();
+            return;
+        }
+
+        let error = install_one(&path, root, false, false).unwrap_err();
+        assert!(error.contains("symlink"));
+        assert!(!external.join("SKILL.md").exists());
+
+        remove_dir_symlink(path.parent().unwrap()).unwrap();
+        fs::remove_dir_all(&external).unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

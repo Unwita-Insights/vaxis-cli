@@ -134,8 +134,8 @@ vaxis install --skills
 The command asks which agents and installation scope to use. For scripts:
 
 ```bash
-vaxis install --skills --agent claude --global --yes
-vaxis install --skills --agent codex --project --yes
+vaxis install --skills --agent claude --global --yes --json
+vaxis install --skills --agent codex --project --yes --json
 ```
 
 The installed discovery file loads the version-matched core contract from the CLI by running
