@@ -12,6 +12,26 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const CORE_SKILL: &str = include_str!("../../skill-data/core/SKILL.md");
 const DISCOVERY_SKILL: &str = include_str!("../../skills/vaxis/SKILL.md");
 const CHECKSUM_FILE: &str = ".vaxis-skill.sha256";
+// Official full skills shipped before the discovery/core split in v0.4.0.
+const LEGACY_MANAGED_SKILL_CHECKSUMS: &[&str] = &[
+    "a1671300e28f976c351b45d57649d91a4f37673b95f6026ef1542edbda0bccff",
+    "63ff43a3f40980f78e6e854dc64dbdd991e49e8410638294e4bf4b02ed77db0b",
+    "6e9682cc4fa7da43a3ab0aa26c68c246c95bc3c1d80eca785d806d096ad43619",
+    "6391ed63478a90458bcda67598a999b75512fdcc0858683901e5db4bbe7e67fd",
+    "d89a8c653265fb1640720d0e55a050431af86fdfe875b397d9b64f57571a7d52",
+    "589690cefc67246b53422867279475588f116ad66c0b89bb0da48954f6c25d6e",
+    "af89e6a168bd9dca72a3a5737d9959d329d36a296266b55146fb3d0db57ddb5a",
+    "844f61189b4b93818c78ad3dedae4b36398af716114717370d3b082a0807e8ad",
+    // The same released files after Git's common Windows LF-to-CRLF checkout conversion.
+    "de807b7e04216b27f01ba2f14887c6afb3d040f282815a0166e0a139f5e2c1e8",
+    "8f4c7f8fecce1c71fc8c9edd0f16fc84054f799b6365424fabbcaa974f477657",
+    "310b925d20b7b1566f1634362febf00ab4e04587aca8c58c3c51a67cfd57b108",
+    "0f17a42476648b7cf02163ff8ba659fd164aa714ae84e74eb5fddafc57025763",
+    "6665e2003a65e2b914a25ed65960c85842f17c1792086cd847032b816cfd12b0",
+    "ce92798bdd21193b389c9003ef73fe6e31ef4c944396fe201846f8c2c4459892",
+    "5ce07b88752ff89131fe37e898596d86bb27dd84f4924e3cd60e7ed837737171",
+    "8876e0c3e57912014588135439bdc71eb951b3c1ff00e5efc68eef1835513fbe",
+];
 
 #[derive(Clone, Copy)]
 enum InstallScope {
@@ -329,6 +349,20 @@ fn install_one(
     force: bool,
     interactive: bool,
 ) -> Result<(&'static str, Option<PathBuf>), String> {
+    install_one_with_legacy_checksums(
+        destination,
+        force,
+        interactive,
+        LEGACY_MANAGED_SKILL_CHECKSUMS,
+    )
+}
+
+fn install_one_with_legacy_checksums(
+    destination: &Path,
+    force: bool,
+    interactive: bool,
+    legacy_checksums: &[&str],
+) -> Result<(&'static str, Option<PathBuf>), String> {
     let parent = destination
         .parent()
         .ok_or_else(|| format!("invalid skill destination: {}", destination.display()))?;
@@ -360,6 +394,12 @@ fn install_one(
         return Ok(("upgraded", None));
     }
 
+    if legacy_checksums.contains(&existing_checksum.as_str()) {
+        let backup = back_up_skill(destination)?;
+        write_skill(destination, &checksum_path, &new_checksum)?;
+        return Ok(("migrated", Some(backup)));
+    }
+
     let replace = if force {
         true
     } else if interactive {
@@ -381,14 +421,7 @@ fn install_one(
         ));
     }
 
-    let backup = backup_path(destination);
-    fs::copy(destination, &backup).map_err(|error| {
-        format!(
-            "cannot back up {} to {}: {error}",
-            destination.display(),
-            backup.display()
-        )
-    })?;
+    let backup = back_up_skill(destination)?;
     write_skill(destination, &checksum_path, &new_checksum)?;
     Ok(("replaced", Some(backup)))
 }
@@ -406,6 +439,18 @@ fn backup_path(destination: &Path) -> PathBuf {
         .unwrap_or_default()
         .as_nanos();
     destination.with_file_name(format!("SKILL.md.{timestamp}.bak"))
+}
+
+fn back_up_skill(destination: &Path) -> Result<PathBuf, String> {
+    let backup = backup_path(destination);
+    fs::copy(destination, &backup).map_err(|error| {
+        format!(
+            "cannot back up {} to {}: {error}",
+            destination.display(),
+            backup.display()
+        )
+    })?;
+    Ok(backup)
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -524,6 +569,29 @@ mod tests {
         assert_eq!(upgraded.0, "upgraded");
         assert!(upgraded.1.is_none());
         assert_eq!(fs::read_to_string(&path).unwrap(), DISCOVERY_SKILL);
+        fs::remove_dir_all(parent.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn official_legacy_skill_is_backed_up_and_migrated_without_force() {
+        let path = temporary_skill_path("legacy-migration");
+        let parent = path.parent().unwrap();
+        fs::create_dir_all(parent).unwrap();
+        let legacy_skill = "official legacy Vaxis skill";
+        fs::write(&path, legacy_skill).unwrap();
+        let legacy_checksum = sha256(legacy_skill.as_bytes());
+
+        let migrated =
+            install_one_with_legacy_checksums(&path, false, false, &[&legacy_checksum]).unwrap();
+
+        assert_eq!(migrated.0, "migrated");
+        let backup = migrated.1.expect("legacy migration must create a backup");
+        assert_eq!(fs::read_to_string(backup).unwrap(), legacy_skill);
+        assert_eq!(fs::read_to_string(&path).unwrap(), DISCOVERY_SKILL);
+        assert_eq!(
+            fs::read_to_string(parent.join(CHECKSUM_FILE)).unwrap(),
+            sha256(DISCOVERY_SKILL.as_bytes())
+        );
         fs::remove_dir_all(parent.parent().unwrap()).unwrap();
     }
 

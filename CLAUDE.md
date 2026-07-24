@@ -171,7 +171,11 @@ mirror note on the `vaxis` side lives next to its own STRONG RULE for the endpoi
 ## When you change things
 
 - Adding/altering a command → update `src/cli.rs`, the module in `src/commands/`, **and**
-  `skill-data/core/SKILL.md` (command reference + JSON output schema + relevant workflow).
+  `skill-data/core/SKILL.md` (agent workflow and JSON contract) **and**
+  `docs/vaxis-cli-commands.md` (complete user-facing command index and short descriptions).
+- Keep `vaxis --help` concise and useful for everyday users. New top-level commands need a
+  clear one-line description in `src/cli.rs`; put detailed flags and advanced options in the
+  command's nested `vaxis <command> --help` output instead of expanding the root help.
 - Changing skill discovery or installation behavior → update `src/commands/skills.rs`,
   `skills/vaxis/SKILL.md`, and `docs/vaxis-skill-distribution-plan.md`.
 - Adding/removing a consumed backend endpoint → update the contract list above **and** the

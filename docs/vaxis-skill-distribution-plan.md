@@ -145,10 +145,11 @@ The installer should report every installed path and use deterministic overwrite
 2. If the destination is absent, install it.
 3. If its content matches the new bundled discovery skill, report it as unchanged.
 4. If its content matches the checksum from the previous Vaxis installation, replace it as a safe managed upgrade.
-5. If it differs from both, treat it as user-modified and do not overwrite it by default.
-6. In an interactive terminal, ask before replacing a modified file.
-7. In non-interactive mode, fail with a clear message unless `--force` is supplied.
-8. With `--force`, copy the existing file to a timestamped `.bak` file before replacement.
+5. If it matches an official full Vaxis skill released before v0.4.0, back it up and migrate it to the discovery skill without requiring `--force`.
+6. If it differs from all managed checksums, treat it as user-modified and do not overwrite it by default.
+7. In an interactive terminal, ask before replacing a modified file.
+8. In non-interactive mode, fail with a clear message unless `--force` is supplied.
+9. With `--force`, copy the existing file to a timestamped `.bak` file before replacement.
 
 The command should return a non-zero exit status for unresolved conflicts and include per-target results in `--json` output.
 
