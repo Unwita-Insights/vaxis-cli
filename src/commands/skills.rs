@@ -31,6 +31,9 @@ const LEGACY_MANAGED_SKILL_CHECKSUMS: &[&str] = &[
     "ce92798bdd21193b389c9003ef73fe6e31ef4c944396fe201846f8c2c4459892",
     "5ce07b88752ff89131fe37e898596d86bb27dd84f4924e3cd60e7ed837737171",
     "8876e0c3e57912014588135439bdc71eb951b3c1ff00e5efc68eef1835513fbe",
+    // The final full skill from PR #23, immediately before the v0.4.0 split.
+    "7699a8ecf66f1b3490dd07395932332d6c5d52f6436a44300ee736cddcfe4f56",
+    "53ac9b4313f66c76d8537d81c60e71b89b2e898697e491dfd19d2a2ff127f281",
 ];
 
 #[derive(Clone, Copy)]
@@ -106,8 +109,7 @@ pub fn run(action: SkillsAction, json: bool) {
         }
         SkillsAction::Get { name } => {
             require_core(&name, json);
-            print!("{CORE_SKILL}");
-            io::stdout().flush().ok();
+            print_core(json);
         }
         SkillsAction::Path { name } => {
             require_core(&name, json);
@@ -122,8 +124,7 @@ pub fn run(action: SkillsAction, json: bool) {
         }
         SkillsAction::Preview { name } => {
             require_core(&name, json);
-            print!("{CORE_SKILL}");
-            io::stdout().flush().ok();
+            print_core(json);
         }
     }
 }
@@ -198,6 +199,22 @@ pub fn install(
 
 fn embedded_source() -> String {
     format!("embedded:v{}/core", env!("CARGO_PKG_VERSION"))
+}
+
+fn print_core(json: bool) {
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "name": "core",
+                "source": embedded_source(),
+                "content": CORE_SKILL,
+            })
+        );
+    } else {
+        print!("{CORE_SKILL}");
+        io::stdout().flush().ok();
+    }
 }
 
 fn require_core(name: &str, json: bool) {
@@ -491,6 +508,7 @@ mod tests {
     #[test]
     fn embedded_skills_have_required_frontmatter() {
         for (name, content) in [("core", CORE_SKILL), ("discovery", DISCOVERY_SKILL)] {
+            let content = content.replace("\r\n", "\n");
             assert!(content.starts_with("---\n"), "{name} skill has no frontmatter");
             assert!(content.contains("\nname: "), "{name} skill has no name");
             assert!(

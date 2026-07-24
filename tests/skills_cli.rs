@@ -48,6 +48,28 @@ fn list_and_path_have_stable_json_output() {
 }
 
 #[test]
+fn get_and_preview_have_stable_json_output() {
+    let expected_source = format!("embedded:v{}/core", env!("CARGO_PKG_VERSION"));
+    let expected_content = include_str!("../skill-data/core/SKILL.md");
+
+    for action in ["get", "preview"] {
+        let output = vaxis(&["skills", action, "core", "--json"]);
+        assert!(output.status.success());
+        let value = json_stdout(&output);
+        assert_eq!(value["name"], "core");
+        assert_eq!(value["source"], expected_source);
+        assert_eq!(value["content"], expected_content);
+    }
+}
+
+#[test]
+fn get_without_json_prints_exact_core_skill() {
+    let output = vaxis(&["skills", "get", "core"]);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, include_bytes!("../skill-data/core/SKILL.md"));
+}
+
+#[test]
 fn json_errors_are_structured_and_never_prompt() {
     let unknown = vaxis(&["skills", "get", "missing", "--json"]);
     assert_eq!(unknown.status.code(), Some(1));

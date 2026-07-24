@@ -15,8 +15,9 @@ All commands accept the global `--json` flag. Use it for scripts and agent-drive
 | `vaxis install --skills ... --force` | Back up and replace a user-modified installed discovery skill. |
 | `vaxis skills list --json` | List skills bundled with the installed CLI. |
 | `vaxis skills get core` | Print the exact embedded, version-matched core `SKILL.md`. |
+| `vaxis skills get core --json` | Return the embedded core skill and source identifier as structured JSON. |
 | `vaxis skills path core --json` | Show the embedded source identifier for the core skill. |
-| `vaxis skills preview core` | Display the bundled core skill for inspection. |
+| `vaxis skills preview core [--json]` | Display the bundled core skill for inspection, optionally as structured JSON. |
 
 `--json` disables installer prompts. Codex uses `.agents/skills/vaxis/SKILL.md` for both
 project and global scope.
@@ -45,8 +46,8 @@ project and global scope.
 |---|---|
 | `vaxis apps list --json` | List applications owned by the logged-in user. |
 | `vaxis apps create <name> [--description <text>] --json` | Create an application and return its ID. |
-| `vaxis apps update [id] [--name <name>] [--description <text>] --json` | Update an application; omit the ID for the interactive picker. |
-| `vaxis apps delete [id] [--force] --json` | Delete an application and its diagrams; `--force` skips confirmation. |
+| `vaxis apps update <id> (--name <name> \| --description <text>) --json` | Update an application non-interactively. Without `--json`, omit the ID or update fields to use prompts. |
+| `vaxis apps delete <id> --force --json` | Delete an application non-interactively. Without `--json`, omit the ID or `--force` to use prompts. |
 | `vaxis apps share <id> [--revoke] --json` | Inspect or revoke a legacy app-wide link. New app-wide links are retired. |
 
 Use `vaxis diagrams share`, not `apps share`, for current sharing.
