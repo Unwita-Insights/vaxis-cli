@@ -147,6 +147,46 @@ The small [`skills/vaxis/SKILL.md`](skills/vaxis/SKILL.md) file tells the assist
 the complete, version-matched instructions with `vaxis skills get core`. Preview those
 instructions at any time with `vaxis skills preview core`.
 
+You can also install the discovery skill from
+[skills.sh](https://www.skills.sh/unwita-insights/vaxis-cli/vaxis):
+
+```bash
+npx skills add https://github.com/unwita-insights/vaxis-cli --skill vaxis
+```
+
+#### Why does the skill run `vaxis skills get core`?
+
+The skills.sh file is intentionally a small discovery skill, while the full behavioral
+contract is embedded in the installed Vaxis binary:
+
+- The instructions always match the installed CLI version.
+- Loading the core does not download a prompt or call the Vaxis server; it reads content
+  compiled into the local binary.
+- There is only one authoritative command/JSON contract, avoiding drift between a copied
+  marketplace skill and the CLI.
+- Agents keep a small startup context and load the detailed rules only when Vaxis is used.
+
+This is the same versioned-CLI pattern used by
+[`agent-browser`](https://www.skills.sh/vercel-labs/agent-browser/agent-browser). Skills whose
+instructions are independent of a CLI version commonly publish their full instructions
+directly instead.
+
+Update the marketplace discovery skill with:
+
+```bash
+npx skills update vaxis
+```
+
+Behavioral and command updates are delivered with a new Vaxis CLI release:
+
+```bash
+npm install -g @unwita-insights/vaxis@latest
+```
+
+Because the discovery skill asks an agent to load instructions from a command, some automated
+security scanners may flag it conservatively. The command reads only the core bundled in the
+official installed binary; install Vaxis from the official npm package or GitHub release.
+
 ### Mermaid basics
 
 Vaxis supports flowcharts (`graph TD` / `graph LR`), ER diagrams (`erDiagram`), sequence

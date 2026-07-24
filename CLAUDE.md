@@ -17,6 +17,35 @@ installed into supported agent hosts by `vaxis install --skills`. When you chang
 flags, output shapes, or workflows, update the core skill too — it documents the exact
 invocations and JSON schemas that assistants rely on.
 
+### Why the installed skill loads `vaxis skills get core`
+
+Keep `skills/vaxis/SKILL.md` as a small discovery skill; do not copy the full core contract
+into it.
+
+- The core contract must match the installed CLI's commands and JSON schemas. It is compiled
+  into the official binary with `include_str!`, so `vaxis skills get core` reads local,
+  version-locked package content and makes no network request.
+- Publishing the full contract through skills.sh would create a second independently updated
+  copy. A marketplace skill could then describe commands that an older installed binary does
+  not support, or remain stale after a CLI release.
+- The discovery file keeps agent startup context small. The larger contract is loaded only
+  when Vaxis is actually used.
+- This is an established pattern for versioned CLI tools. For example,
+  [`agent-browser`](https://www.skills.sh/vercel-labs/agent-browser/agent-browser) publishes a
+  discovery stub that loads its version-matched core with `agent-browser skills get core`.
+  Static skills such as [`gh-skill`](https://www.skills.sh/cli/cli/gh-skill), whose contract is
+  the skill file itself, publish their complete instructions directly.
+
+Security scanners may conservatively flag the discovery command as indirect prompt loading.
+The trust boundary is the locally installed Vaxis binary, not remote task-time content. Users
+should install Vaxis only from the official npm/GitHub release. Any change that makes
+`skills get core` fetch instructions from the network requires a fresh security review.
+
+The public listing is
+[`unwita-insights/vaxis-cli/vaxis`](https://www.skills.sh/unwita-insights/vaxis-cli/vaxis).
+Update `skills/vaxis/SKILL.md` for discovery/triggering changes; update
+`skill-data/core/SKILL.md` and publish a new CLI version for behavioral changes.
+
 ## Build / run / release
 
 ```bash
