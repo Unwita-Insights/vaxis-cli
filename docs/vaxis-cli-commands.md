@@ -1,78 +1,106 @@
 # Vaxis CLI — Command Reference
 
-All commands support `--json` flag for machine-readable output (used by Claude AI).
+This is the maintained, user-facing command index for the Vaxis CLI. Run
+`vaxis <command> --help` for the authoritative flags supported by the installed version.
 
----
+All commands accept the global `--json` flag. Use it for scripts and agent-driven decisions.
 
-## Auth
+## Install and skills
 
-| Command | Status | Description |
-|---------|--------|-------------|
-| `vaxis login` | ✅ Built | Opens browser for Google OAuth. Polls until complete. Saves token to `~/.config/vaxis/config.toml` |
-| `vaxis logout` | ✅ Built | Clears saved user token. Preserves server URL config |
-| `vaxis me --json` | ✅ Built | Shows logged-in user name and email. Returns `{"error":"not_authenticated"}` in JSON mode if not logged in |
+| Command | Description |
+|---|---|
+| `vaxis install --skills` | Interactively install the small Vaxis discovery skill for supported agents. |
+| `vaxis install --skills --agent <agents\|claude\|codex> --project --yes --json` | Install non-interactively in the current project. Repeat `--agent` to target multiple hosts. |
+| `vaxis install --skills --agent <agent> --global --yes --json` | Install the discovery skill for the current user. |
+| `vaxis install --skills ... --force` | Back up and replace a user-modified installed discovery skill. |
+| `vaxis skills list --json` | List skills bundled with the installed CLI. |
+| `vaxis skills get core` | Print the exact embedded, version-matched core `SKILL.md`. |
+| `vaxis skills get core --json` | Return the embedded core skill and source identifier as structured JSON. |
+| `vaxis skills path core --json` | Show the embedded source identifier for the core skill. |
+| `vaxis skills preview core [--json]` | Display the bundled core skill for inspection, optionally as structured JSON. |
 
----
+`--json` disables installer prompts. Codex uses `.agents/skills/vaxis/SKILL.md` for both
+project and global scope.
 
-## Config
+## Authentication
 
-| Command | Status | Description |
-|---------|--------|-------------|
-| `vaxis config set-url <url>` | ✅ Built | Saves the Vaxis server URL to config file. Allows `vaxis login` to work without setting `VAXIS_AUTH_URL` env var every time |
-| `vaxis config show` | ✅ Built | Shows current config: server URL and logged-in user |
+| Command | Description |
+|---|---|
+| `vaxis login` | Open the browser-based Google login flow and store the CLI session. |
+| `vaxis me --json` | Show the stored user profile or return `not_authenticated`. |
+| `vaxis logout` | Clear the stored user session. |
 
----
+## Configuration
 
-## Apps
+| Command | Description |
+|---|---|
+| `vaxis config set-url <url>` | Save a custom Vaxis server URL. |
+| `vaxis config set-mode <mermaid\|prompt>` | Choose whether the driving agent or Vaxis server AI generates diagrams. |
+| `vaxis config show --json` | Show the effective server URL and saved generation mode. |
 
-| Command | Status | Description |
-|---------|--------|-------------|
-| `vaxis apps list --json` | ✅ Built | Lists all applications owned by the logged-in user. Returns array of `{ id, name, description, created_at }` |
-| `vaxis apps create <name> --json` | ✅ Built | Creates a new application (project). Optional `--description` flag. Returns created app with ID |
-| `vaxis apps update [id] --name --description` | ✅ Built | Updates app name or description. Omit ID for interactive picker. Omit flags for pre-filled interactive input |
-| `vaxis apps delete [id] --force` | ✅ Built | Deletes an application and all its diagrams. Omit ID for interactive picker. `--force` skips confirmation |
-| `vaxis apps share <id> [--revoke] --json` | ✅ Built | **Legacy read/revoke only** — app-wide share creation is retired (server returns 410). Reports a still-live legacy app link and, with `--revoke`, turns it off. Share individual diagrams with `vaxis diagrams share` instead |
+`VAXIS_AUTH_URL` overrides the stored server URL for the current process.
 
----
+## Applications
+
+| Command | Description |
+|---|---|
+| `vaxis apps list --json` | List applications owned by the logged-in user. |
+| `vaxis apps create <name> [--description <text>] --json` | Create an application and return its ID. |
+| `vaxis apps update <id> (--name <name> \| --description <text>) --json` | Update an application non-interactively. Without `--json`, omit the ID or update fields to use prompts. |
+| `vaxis apps delete <id> --force --json` | Delete an application non-interactively. Without `--json`, omit the ID or `--force` to use prompts. |
+| `vaxis apps share <id> [--revoke] --json` | Inspect or revoke a legacy app-wide link. New app-wide links are retired. |
+
+Use `vaxis diagrams share`, not `apps share`, for current sharing.
 
 ## Diagrams
 
-| Command | Status | Description |
-|---------|--------|-------------|
-| `vaxis diagrams list <appId> --json` | ✅ Built | Lists all diagrams in an application. Shows which are root vs child. Returns `{ id, name, parent_diagram_id }` per diagram |
-| `vaxis diagrams create <appId> <name> --json` | ✅ Built | Creates a new empty diagram inside an application. Returns `{ id, name }` |
-| `vaxis diagrams generate <id> --prompt "..." [--intent auto\|edit\|replace\|drill\|detail\|simplify\|ask] [--session <id>] --json` | ✅ Built | Sends prompt to server AI. May return an edit (`{ mermaid, drills[] }`) OR a no-op — an Ask `answer`, a `notice`, a `mode_mismatch`, or a delete `actions` confirmation (`unchanged` / no drills). Use `--mermaid` instead when Claude is the AI |
-| `vaxis diagrams generate <id> --mermaid "..." --json` | ✅ Built | Saves Claude-provided Mermaid directly — server skips AI but still parses drill annotations and creates child diagrams. Returns `{ diagram_id, mermaid, drills[] }` |
-| `vaxis diagrams ask <id> --prompt "..." [--session <id>] --json` | ✅ Built | Asks a question about a diagram — server AI answers in prose, makes no edit |
-| `vaxis diagrams share <id> [--rotate] [--revoke] --json` | ✅ Built | Get/create the per-diagram public link (covers the diagram + its drill subtree). Plain call returns the existing link; `--rotate` mints a new one (invalidates the old); `--revoke` turns sharing off |
-| `vaxis diagrams sessions list\|create\|rename <id> ... --json` | ✅ Built | Manage server-AI chat sessions for a diagram |
-| `vaxis diagrams show <id> --json` | ✅ Built | Shows diagram metadata + current Mermaid (`current_mermaid` from the diagram record) + child node map. Claude reads this before every generate call |
-| `vaxis diagrams tree <id> --json` | ✅ Built | Shows the full diagram hierarchy from root down to all descendants as a nested tree. Claude uses this to find the right diagram to update |
-| `vaxis diagrams undo <id>` | ✅ Built | Removes the last AI-generated user+assistant message pair from chat history. Safe to call before retrying a bad generation |
-| `vaxis diagrams rename <id> <name>` | ✅ Built | Renames a diagram. Does not affect content or child diagrams |
-| `vaxis diagrams delete [id] --force` | ✅ Built | Deletes a diagram and all its child diagrams recursively. Omit ID for interactive picker. `--force` skips confirmation |
-| `vaxis diagrams format` | ✅ Built | Returns the full Mermaid format reference: editable vs image-fallback diagram types, a working example for each, node ID rules, drill annotation syntax, and limits. Runs without auth. Claude calls this at the start of complex sessions |
-| `vaxis diagrams import <id> --mermaid "..."` | ✅ Built | Saves user-provided raw Mermaid directly to a diagram without calling AI. Used when the user pastes Mermaid from another tool or doc |
+| Command | Description |
+|---|---|
+| `vaxis diagrams list <appId> --json` | List diagrams in an application. |
+| `vaxis diagrams create <appId> <name> --json` | Create an empty diagram and return its ID. |
+| `vaxis diagrams generate <id> --prompt <text> [--intent <intent>] [--session <id>] --json` | Ask Vaxis server AI to generate, edit, drill, simplify, or answer. |
+| `vaxis diagrams generate <id> --mermaid <source> [direction options] --json` | Save agent-authored Mermaid directly and process Vaxis drill annotations. |
+| `vaxis diagrams ask <id> --prompt <question> [--session <id>] --json` | Ask about a diagram without editing it. |
+| `vaxis diagrams sessions list <id> --json` | List AI chat sessions for a diagram. |
+| `vaxis diagrams sessions create <id> [--title <title>] --json` | Start a new AI chat session. |
+| `vaxis diagrams sessions rename <id> <sessionId> <title> --json` | Rename an AI chat session. |
+| `vaxis diagrams share <id> [--rotate\|--revoke] --json` | Get/create, rotate, or revoke the diagram's public link. |
+| `vaxis diagrams show <id> --json` | Show metadata, `current_mermaid`, children, and ancestry. Read before editing. |
+| `vaxis diagrams tree <id> --json` | Show the full root-to-children diagram hierarchy. |
+| `vaxis diagrams undo <id> --json` | Remove the last AI generation turn before retrying. |
+| `vaxis diagrams rename <id> <name> --json` | Rename a diagram without changing its content. |
+| `vaxis diagrams delete <id> --force --json` | Delete a diagram and all descendants non-interactively. Without `--json`, omit the ID or `--force` to use prompts. |
+| `vaxis diagrams format --json` | Return the offline Mermaid authoring contract, supported types, rules, and limits. |
+| `vaxis diagrams rules-check --json` | Compare the embedded authoring contract with the connected server. |
+| `vaxis diagrams evaluate --captures <file> [--output <file>] --json` | Evaluate recorded direct/native Mermaid outputs against the parity catalog. |
+| `vaxis diagrams import <id> --mermaid <source> --json` | Save raw Mermaid directly without calling AI. |
 
----
+### Generate options
 
-## Status Summary
+`--prompt` and `--mermaid` conflict.
 
-| Area | Built | Needed | Total |
-|------|-------|--------|-------|
-| Auth | 3 | 0 | 3 |
-| Config | 2 | 0 | 2 |
-| Apps | 5 | 0 | 5 |
-| Diagrams | 13 | 0 | 13 |
-| **Total** | **23** | **0** | **23** |
+| Option | Applies to | Description |
+|---|---|---|
+| `--intent auto\|edit\|replace\|drill\|detail\|simplify\|ask` | `--prompt` | Set the server-AI intent. Default behavior is `auto`. |
+| `--session <id>` | Prompt/ask | Target an existing AI chat session. |
+| `--direction-policy preserve\|auto` | `--mermaid` | Choose whether direct Mermaid direction is preserved or automatically selected. |
+| `--explicit-direction lr\|tb` | `--mermaid` | Force direct Mermaid direction. |
+| `--fresh-generation` | `--mermaid` | Mark new direct Mermaid as eligible for automatic direction selection. |
+| `--viewport-width <n> --viewport-height <n>` | `--mermaid` | Supply the canvas dimensions used for direction decisions. |
 
----
+## Global flags
 
-## Global Flags
+| Flag | Description |
+|---|---|
+| `--json` | Request machine-readable output. For skill installation, it also disables prompts. |
+| `--help` | Show command or subcommand help. |
+| `--version` | Show the CLI version. |
 
-| Flag | Applies to | Description |
-|------|-----------|-------------|
-| `--json` | All commands | Outputs raw JSON instead of colored text. Required for Claude AI to parse output and make decisions |
-| `--force` | delete commands | Skips confirmation prompt. Used by Claude in scripting mode |
-| `--help` | All commands | Shows command usage and available flags |
-| `--version` | Root | Shows CLI version |
+Command-specific flags such as `--force`, `--yes`, `--rotate`, and `--revoke` are documented
+with their commands above.
+
+## Maintenance rule
+
+When a CLI command, subcommand, argument, flag, or output contract changes, update this file
+in the same pull request. Validate it against `vaxis --help` and the relevant nested
+`--help` output.

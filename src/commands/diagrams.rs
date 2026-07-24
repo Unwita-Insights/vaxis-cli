@@ -60,7 +60,7 @@ fn preflight_mermaid(mermaid: &str, json: bool) -> bool {
 /// First-run preference. The first time a human runs `diagrams generate` in a
 /// real terminal, ask whether diagrams should be authored by their own AI
 /// (`--mermaid`) or by Vaxis's server AI (`--prompt`), and remember the choice
-/// so the assistant can honor it (see skills/SKILL.md — "generation mode").
+/// so the assistant can honor it (see skill-data/core/SKILL.md — "generation mode").
 ///
 /// Silent no-op — never blocks — when the mode is already set, in `--json` mode,
 /// or when there is no interactive terminal (e.g. the CLI is being driven by an
@@ -111,6 +111,8 @@ pub async fn run(action: DiagramsAction, json: bool) {
         }
         _ => {}
     }
+
+    validate_json_arguments(&action, json);
 
     let token = match auth_token() {
         Some(t) => t,
@@ -185,6 +187,32 @@ pub async fn run(action: DiagramsAction, json: bool) {
         DiagramsAction::Evaluate { captures, output } => evaluate_cmd(&captures, output.as_deref()),
         DiagramsAction::Import { id, mermaid } => import_cmd(&token, &id, &mermaid, json).await,
     }
+}
+
+fn validate_json_arguments(action: &DiagramsAction, json: bool) {
+    if !json {
+        return;
+    }
+
+    if let DiagramsAction::Delete { id, force, .. } = action {
+        if id.is_none() {
+            fail_json("diagram ID is required with `--json`");
+        }
+        if !force {
+            fail_json("`--force` is required with `--json`");
+        }
+    }
+}
+
+fn fail_json(message: &str) -> ! {
+    println!(
+        "{}",
+        serde_json::json!({
+            "error": "invalid_arguments",
+            "message": message,
+        })
+    );
+    std::process::exit(1);
 }
 
 async fn resolve_diagram_id(
@@ -1355,7 +1383,7 @@ mod format_tests {
         let spec = format_spec();
         let version = spec["schema_version"].as_str().unwrap();
         let marker = format!("<!-- vaxis-authoring-rules: {version} -->");
-        let skill = include_str!("../../skills/SKILL.md");
+        let skill = include_str!("../../skill-data/core/SKILL.md");
         assert!(
             skill.contains(&marker),
             "SKILL.md must declare the embedded format contract version"

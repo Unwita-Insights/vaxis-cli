@@ -11,7 +11,7 @@ without authentication or network access.
 2. Increment the canonical contract version. Additive fields may keep the same major
    version; removed or redefined fields require a major version increase.
 3. Update `src/diagram_format.json` in this repository from the canonical contract.
-4. Update `skills/SKILL.md` and its `vaxis-authoring-rules` marker.
+4. Update `skill-data/core/SKILL.md` and its `vaxis-authoring-rules` marker.
 5. Run `cargo test` and `vaxis diagrams format --json`.
    Against a deployed server, run `vaxis diagrams rules-check --json`; it exits with status
    `2` when the embedded schema version, storage keywords, or seeded-drill floor drift.

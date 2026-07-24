@@ -8,6 +8,8 @@ fn auth_token() -> Option<String> {
 }
 
 pub async fn run(action: AppsAction, json: bool) {
+    validate_json_arguments(&action, json);
+
     let token = match auth_token() {
         Some(t) => t,
         None => {
@@ -33,6 +35,43 @@ pub async fn run(action: AppsAction, json: bool) {
         }
         AppsAction::Share { id, revoke } => share(&token, &id, revoke, json).await,
     }
+}
+
+fn validate_json_arguments(action: &AppsAction, json: bool) {
+    if !json {
+        return;
+    }
+
+    match action {
+        AppsAction::Update { id, name, description } => {
+            if id.is_none() {
+                fail_json("application ID is required with `--json`");
+            }
+            if name.is_none() && description.is_none() {
+                fail_json("`--name` or `--description` is required with `--json`");
+            }
+        }
+        AppsAction::Delete { id, force } => {
+            if id.is_none() {
+                fail_json("application ID is required with `--json`");
+            }
+            if !force {
+                fail_json("`--force` is required with `--json`");
+            }
+        }
+        _ => {}
+    }
+}
+
+fn fail_json(message: &str) -> ! {
+    println!(
+        "{}",
+        serde_json::json!({
+            "error": "invalid_arguments",
+            "message": message,
+        })
+    );
+    std::process::exit(1);
 }
 
 // Fetches app list and lets user pick if no id was provided on the command line.

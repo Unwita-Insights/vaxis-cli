@@ -134,13 +134,18 @@ VAXIS_AUTH_URL=http://localhost:3000 vaxis apps list --json
 
 ---
 
-## Using Vaxis with Claude
+## Using Vaxis with AI assistants
 
-Vaxis ships a Claude skill at [`skills/SKILL.md`](skills/SKILL.md). It teaches an assistant
-when to reach for Vaxis and how to sequence commands — check before creating, read before
-overwriting, undo before retrying, and end each session with a share link. Point your
-assistant at that file (or install it as a skill) to let it design systems on your behalf and
-hand you a link at the end.
+Install the bundled discovery skill for Claude, Codex, and other Agent Skills compatible
+hosts:
+
+```bash
+vaxis install --skills
+```
+
+The small [`skills/vaxis/SKILL.md`](skills/vaxis/SKILL.md) file tells the assistant to load
+the complete, version-matched instructions with `vaxis skills get core`. Preview those
+instructions at any time with `vaxis skills preview core`.
 
 ### Mermaid basics
 

@@ -94,6 +94,39 @@ impl GenerationMode {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Install optional Vaxis integrations
+    Install {
+        /// Install the Vaxis discovery skill for supported AI agents
+        #[arg(long)]
+        skills: bool,
+
+        /// Target agent (repeatable; Codex installs use the shared .agents path)
+        #[arg(long, value_enum)]
+        agent: Vec<SkillAgent>,
+
+        /// Install in the current project
+        #[arg(long, conflicts_with = "global")]
+        project: bool,
+
+        /// Install for the current user
+        #[arg(long, conflicts_with = "project")]
+        global: bool,
+
+        /// Accept safe defaults without prompting
+        #[arg(long)]
+        yes: bool,
+
+        /// Back up and replace a user-modified discovery skill
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Inspect skills bundled with the Vaxis CLI
+    Skills {
+        #[command(subcommand)]
+        action: SkillsAction,
+    },
+
     /// Log in with your Google account
     Login,
 
@@ -119,6 +152,47 @@ pub enum Commands {
     Diagrams {
         #[command(subcommand)]
         action: DiagramsAction,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum SkillAgent {
+    Agents,
+    Claude,
+    Codex,
+}
+
+impl SkillAgent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Agents => "agents",
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
+}
+
+#[derive(Subcommand)]
+pub enum SkillsAction {
+    /// List skills bundled with this CLI
+    List,
+
+    /// Print a bundled skill as exact raw content
+    Get {
+        /// Bundled skill name
+        name: String,
+    },
+
+    /// Show the effective source of a bundled skill
+    Path {
+        /// Bundled skill name
+        name: String,
+    },
+
+    /// Preview a bundled skill (currently the same raw content as get)
+    Preview {
+        /// Bundled skill name
+        name: String,
     },
 }
 
@@ -306,14 +380,14 @@ pub enum DiagramsAction {
 
     /// Delete a diagram and all its children (interactive if no ID given)
     Delete {
-        /// Diagram ID (omit to pick from list)
+        /// Diagram ID (required with --json; omit to pick interactively)
         id: Option<String>,
 
         /// Application ID (used for interactive picker)
         #[arg(long)]
         app_id: Option<String>,
 
-        /// Skip confirmation prompt
+        /// Skip confirmation prompt (required with --json)
         #[arg(short, long)]
         force: bool,
     },

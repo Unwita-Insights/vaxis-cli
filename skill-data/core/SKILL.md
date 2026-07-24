@@ -1,3 +1,8 @@
+---
+name: vaxis-core
+description: Complete Vaxis CLI workflow and Vaxis-compatible Mermaid authoring instructions.
+---
+
 # Vaxis Skill
 
 **Model-agnostic — works with Claude, GPT, Gemini, and any LLM.**
@@ -190,6 +195,28 @@ Exception: **Whole-canvas transform** ("turn this into a hospital system") → t
 
 All commands support `--json` for machine-readable output. Always use `--json` when reading output to make decisions.
 
+### Skills
+
+```bash
+# Install the discovery skill (interactive by default)
+vaxis install --skills
+
+# Scripted project install for Codex
+vaxis install --skills --agent codex --project --yes --json
+
+# Inspect the version-matched instructions embedded in this CLI
+vaxis skills list --json
+vaxis skills path core --json
+vaxis skills get core
+vaxis skills preview core
+```
+
+`--json` never prompts. Missing install selections and unknown skill names return
+`{"error":"<stable_code>","message":"<details>"}` with exit status `1`. `get core` prints the
+exact raw embedded content; `preview core` currently prints the same content for explicit
+human inspection. Codex installs use the shared `.agents/skills/vaxis/SKILL.md` path at both
+project and global scope.
+
 ### Applications
 
 ```bash
@@ -205,7 +232,7 @@ vaxis apps update <id> --name "New Name" --json
 vaxis apps update <id> --description "New description" --json
 
 # Delete an application
-vaxis apps delete <id> --force
+vaxis apps delete <id> --force --json
 
 # Inspect or revoke a LEGACY app-wide link (retired — cannot create one)
 vaxis apps share <appId> --json
@@ -270,9 +297,9 @@ vaxis diagrams undo <diagramId> --json
 vaxis diagrams rename <diagramId> "New Name" --json
 
 # Delete a diagram (cascades to all children)
-vaxis diagrams delete <diagramId> --force
-# If you don't know the diagram ID, omit it — interactive picker appears (requires --app-id)
-vaxis diagrams delete --app-id <appId> --force
+vaxis diagrams delete <diagramId> --force --json
+# If you don't know the diagram ID, list the application first and use the returned ID
+vaxis diagrams list <appId> --json
 
 # Get full Mermaid format reference (diagram types, syntax rules, limits)
 vaxis diagrams format --json
@@ -533,7 +560,7 @@ Never ask more than one clarifying question before proceeding.
 3. On confirmation:
    vaxis diagrams delete <diagramId> --force --json
    OR
-   vaxis apps delete <appId> --force
+   vaxis apps delete <appId> --force --json
 
 4. Report clearly:
    "Done — deleted Auth Service Prototype and its 2 child diagrams."
@@ -1075,7 +1102,7 @@ input or file errors.
 { "ok": true, "diagram_id": "diag_xxx", "name": "New Name" }
 ```
 
-### `vaxis diagrams delete --json`
+### `vaxis diagrams delete <id> --force --json`
 ```json
 { "ok": true, "diagram_id": "diag_xxx" }
 ```

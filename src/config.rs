@@ -9,7 +9,7 @@ pub struct Config {
     /// How diagrams are generated: `"mermaid"` (the driving AI — Claude/Codex —
     /// writes the Mermaid itself) or `"prompt"` (Vaxis's server AI generates it).
     /// Set once on the first interactive `diagrams generate`; the assistant reads
-    /// it via `config show` and honors it (see skills/SKILL.md).
+    /// it via `config show` and honors it (see skill-data/core/SKILL.md).
     pub generation_mode: Option<String>,
 }
 

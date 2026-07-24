@@ -14,6 +14,9 @@ async fn main() {
 
     match cli.command {
         Commands::Login                => commands::login::run().await,
+        Commands::Install { skills, agent, project, global, yes, force } =>
+            commands::skills::install(skills, agent, project, global, yes, force, json),
+        Commands::Skills { action }     => commands::skills::run(action, json),
         Commands::Me                   => commands::me::run(json),
         Commands::Logout               => commands::logout::run(),
         Commands::Config { action }    => commands::config::run(action, json),

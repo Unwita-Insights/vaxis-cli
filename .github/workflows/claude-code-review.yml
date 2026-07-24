@@ -7,6 +7,7 @@ on:
     paths:
       - "src/**/*.rs"
       - "skills/**/*.md"
+      - "skill-data/**/*.md"
       - "npm/**"
       - "Cargo.toml"
       - "CLAUDE.md"
@@ -54,8 +55,9 @@ jobs:
                - Post this reminder verbatim when the contract is touched, naming the exact endpoint/field: *"⚠️ Backend API contract affected — update the contract list in BOTH `vaxis-cli/CLAUDE.md` and `vaxis/CLAUDE.md` (https://github.com/Unwita-Insights/vaxis) in the same change, or open an issue in the vaxis repo. Treat this PR as incomplete until both sides agree."*
                - Watch for retired routes the CLI must NEVER call: `POST /api/applications/{id}/share` is retired server-side (hard `410 APP_SHARE_DISABLED`). App-wide share is read/revoke ONLY (`GET|DELETE`). Sharing is per-diagram now (`GET|POST|DELETE /api/diagrams/{id}/share`, `POST` create-OR-rotate).
 
-            2. **`skills/SKILL.md` sync**
-               - `skills/SKILL.md` is the behavioral contract that tells the AI assistant HOW to invoke the CLI (exact command invocations + JSON output schemas). If this PR changes a command's flags, output shape, or workflow, `SKILL.md` MUST be updated in the same PR. Missing update → **MAJOR**.
+            2. **Embedded core/discovery skill sync**
+               - `skill-data/core/SKILL.md` is the authoritative behavioral contract embedded for `vaxis skills get core`. If this PR changes a command's flags, output shape, or workflow, the core skill MUST be updated in the same PR.
+               - `skills/vaxis/SKILL.md` is the small installed discovery skill. If the core-loading or skill-install workflow changes, keep this discovery stub in sync. Missing required updates → **MAJOR**.
 
             3. **`--json` global flag**
                - `--json` is a global flag threaded as a `bool` into every command; the assistant always uses `--json`. Any NEW command MUST honor `--json` with a machine-readable output mode. Interactive `dialoguer` prompts (Select/Input/Confirm) MUST be guarded so they never fire in `--json`/scripting mode.
@@ -90,7 +92,7 @@ jobs:
             Broken auth guard, token leak, a consumed endpoint changed with no contract update, calling a retired route.
 
             ### 🟠 MAJOR (Should Fix Before Merge)
-            Contract/`SKILL.md` out of sync, `--json` not honored, `generate` not checking `unchanged`, drill loop broken, version lockstep broken.
+            Contract/core or discovery skill out of sync, `--json` not honored, `generate` not checking `unchanged`, drill loop broken, version lockstep broken.
 
             ### 🟡 MINOR (Consider Fixing)
             Inconsistent error/output style, unguarded interactive prompt, stale hardcoded version.

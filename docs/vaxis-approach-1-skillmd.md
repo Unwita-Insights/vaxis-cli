@@ -2,7 +2,7 @@
 
 **Status: Implemented**  
 **Target:** Claude Code users (developers using Claude in a terminal/IDE context)  
-**Implementation cost:** Zero — already shipped in `skills/SKILL.md`
+**Status:** Implemented with a discovery skill and CLI-embedded core instructions.
 
 ---
 
@@ -27,7 +27,8 @@ No protocol handshake. No API token exchange. Just a shell command — the same 
 
 A `SKILL.md` file is a structured documentation file that Claude Code reads to understand a CLI tool. It is the standard integration pattern for Claude Code skills.
 
-**Location in this repo:** `skills/SKILL.md`
+**Locations in this repo:** `skills/vaxis/SKILL.md` for discovery and
+`skill-data/core/SKILL.md` for the complete instructions.
 
 The file contains:
 - When Claude should use this tool (activation triggers)
@@ -45,7 +46,7 @@ Claude reads this file once at the start of a session (or whenever it loads the 
 npx skills add your-org/vaxis
 
 # Option B — global (available in all Claude Code sessions)
-# Add skills/SKILL.md path to Claude Code user settings
+# Or run `vaxis install --skills` to install for a supported agent
 ```
 
 This creates `.claude/skills/vaxis/SKILL.md` in the project — a minimal stub pointing to the full runtime instructions.
@@ -58,7 +59,7 @@ This creates `.claude/skills/vaxis/SKILL.md` in the project — a minimal stub p
 
 ```
 1. Developer asks Claude: "Create an auth service diagram for this app"
-2. Claude reads skills/SKILL.md (loaded at session start)
+2. The agent loads `skills/vaxis/SKILL.md` on a subsequent session or reload
 3. Claude knows: "I need to call vaxis diagrams create, then vaxis diagrams generate"
 4. Claude runs:
      vaxis apps list --json
@@ -148,7 +149,7 @@ The approach **does not scale to a SaaS product** with non-developer users who a
 
 ## Current Status
 
-The `skills/SKILL.md` in this repo is the active implementation. It covers:
+The `skill-data/core/SKILL.md` in this repo is the active core implementation. It covers:
 - All vaxis CLI commands
 - 8 standard workflows
 - Mermaid format rules
@@ -161,6 +162,7 @@ The `skills/SKILL.md` in this repo is the active implementation. It covers:
 
 ## See Also
 
-- `skills/SKILL.md` — the active Claude Code skill file
+- `skills/vaxis/SKILL.md` — the discovery skill installed for supported agents
+- `skill-data/core/SKILL.md` — the complete instructions embedded in the CLI
 - `docs/vaxis-approach-2-remote-mcp.md` — Approach 2: Remote MCP for broader Claude coverage
 - `docs/vaxis-claude-integration-overview.md` — Why both approaches are needed

@@ -35,11 +35,12 @@ Doing both phases means every Claude user — from a developer in their terminal
 
 ## Approach 1 Summary: SKILL.md + Direct CLI
 
-**Status: Implemented.** The `skills/SKILL.md` file in this repo is the active Claude Code skill.
+**Status: Implemented.** `skills/vaxis/SKILL.md` is the discovery skill and
+`skill-data/core/SKILL.md` contains the version-matched instructions embedded in the CLI.
 
 Claude Code reads the SKILL.md and then executes vaxis CLI commands directly:
 ```
-Claude → reads skills/SKILL.md → runs `vaxis diagrams generate "$ID" --mermaid ...`
+Agent → reads discovery skill → runs `vaxis skills get core` → runs `vaxis diagrams generate "$ID" --mermaid ...`
 ```
 
 This works because Claude Code has native shell access. It is the simplest possible integration — no protocol, no server, no infrastructure change.
