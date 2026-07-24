@@ -380,14 +380,14 @@ pub enum DiagramsAction {
 
     /// Delete a diagram and all its children (interactive if no ID given)
     Delete {
-        /// Diagram ID (omit to pick from list)
+        /// Diagram ID (required with --json; omit to pick interactively)
         id: Option<String>,
 
         /// Application ID (used for interactive picker)
         #[arg(long)]
         app_id: Option<String>,
 
-        /// Skip confirmation prompt
+        /// Skip confirmation prompt (required with --json)
         #[arg(short, long)]
         force: bool,
     },

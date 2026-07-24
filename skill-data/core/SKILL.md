@@ -298,8 +298,8 @@ vaxis diagrams rename <diagramId> "New Name" --json
 
 # Delete a diagram (cascades to all children)
 vaxis diagrams delete <diagramId> --force --json
-# If you don't know the diagram ID, omit it — interactive picker appears (requires --app-id)
-vaxis diagrams delete --app-id <appId> --force --json
+# If you don't know the diagram ID, list the application first and use the returned ID
+vaxis diagrams list <appId> --json
 
 # Get full Mermaid format reference (diagram types, syntax rules, limits)
 vaxis diagrams format --json
@@ -1102,7 +1102,7 @@ input or file errors.
 { "ok": true, "diagram_id": "diag_xxx", "name": "New Name" }
 ```
 
-### `vaxis diagrams delete --json`
+### `vaxis diagrams delete <id> --force --json`
 ```json
 { "ok": true, "diagram_id": "diag_xxx" }
 ```

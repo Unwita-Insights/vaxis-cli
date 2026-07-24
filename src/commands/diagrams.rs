@@ -112,6 +112,8 @@ pub async fn run(action: DiagramsAction, json: bool) {
         _ => {}
     }
 
+    validate_json_arguments(&action, json);
+
     let token = match auth_token() {
         Some(t) => t,
         None => {
@@ -185,6 +187,32 @@ pub async fn run(action: DiagramsAction, json: bool) {
         DiagramsAction::Evaluate { captures, output } => evaluate_cmd(&captures, output.as_deref()),
         DiagramsAction::Import { id, mermaid } => import_cmd(&token, &id, &mermaid, json).await,
     }
+}
+
+fn validate_json_arguments(action: &DiagramsAction, json: bool) {
+    if !json {
+        return;
+    }
+
+    if let DiagramsAction::Delete { id, force, .. } = action {
+        if id.is_none() {
+            fail_json("diagram ID is required with `--json`");
+        }
+        if !force {
+            fail_json("`--force` is required with `--json`");
+        }
+    }
+}
+
+fn fail_json(message: &str) -> ! {
+    println!(
+        "{}",
+        serde_json::json!({
+            "error": "invalid_arguments",
+            "message": message,
+        })
+    );
+    std::process::exit(1);
 }
 
 async fn resolve_diagram_id(
