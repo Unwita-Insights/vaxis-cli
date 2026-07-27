@@ -76,6 +76,9 @@ vaxis diagrams tree <diagramId> --json
 vaxis diagrams share <diagramId> --json
 ```
 
+Share the **root** diagram. One root link also unlocks every sub-diagram it
+drills into, so sharing a leaf gives people only part of the tree.
+
 Normally, you do not need to run these diagram commands yourself—the agent uses
 them after loading the skill.
 
@@ -111,4 +114,3 @@ Keep the codebase and Vaxis diagrams synchronized:
 
 This makes architecture maintenance part of normal development instead of a
 separate documentation task.
-

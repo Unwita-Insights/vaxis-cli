@@ -184,8 +184,8 @@ route, `POST` is always create-or-rotate (UPSERT). Old token invalidated immedia
 - `GET /api/diagrams/:id/chat` — load chat history
 - `DELETE /api/diagrams/:id/chat/last` — undo last AI turn
 - `GET /api/diagrams/:id/tree` — bird's-eye / expand-subtree
-- `POST /api/applications/:appId/share` — generate public link
-- `GET /api/applications/:appId/share` — check existing share token
+- ~~`POST /api/applications/:appId/share` — generate public link~~ — **RETIRED** (`410 APP_SHARE_DISABLED`); use `POST /api/diagrams/:id/share` on the root diagram
+- `GET /api/applications/:appId/share` — check for a legacy app-wide token (read/revoke only)
 
 ---
 
@@ -231,7 +231,8 @@ First-time drill (no child yet)
 ### 3. Share a diagram publicly
 ```
 DiagramEditor → Share menu
-  → POST /api/applications/:appId/share  (create or rotate token)
+  → POST /api/applications/:appId/share  (RETIRED — 410 APP_SHARE_DISABLED)
+  → sharing is per-diagram now; share the ROOT diagram instead
   → shareable URL: /view/:token
 
 Public user opens /view/:token

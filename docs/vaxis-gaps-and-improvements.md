@@ -15,7 +15,6 @@ These are capabilities Excalidraw MCP has that Vaxis currently lacks, plus impro
 | G-04 | Only last-turn undo | Low | API + DB |
 | G-05 | No MCP server | High | New service |
 | G-06 | No viewport control | Low | API + Frontend |
-| G-07 | Share not in CLI | Low | CLI |
 
 ---
 
