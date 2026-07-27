@@ -7,7 +7,7 @@ This file starts with the release below. For anything earlier, see the
 [git history](https://github.com/Unwita-Insights/vaxis-cli/commits/main) and
 [GitHub releases](https://github.com/Unwita-Insights/vaxis-cli/releases).
 
-## [Unreleased]
+## [0.5.0] — 2026-07-27
 
 ### Removed
 
@@ -41,6 +41,8 @@ This file starts with the release below. For anything earlier, see the
 - [AI agent quick start guide](docs/vaxis-agent-quick-start.md) — install, skill setup,
   a first prompt to send an agent, and the `CLAUDE.md`/`AGENTS.md` snippet that keeps
   diagrams in step with the code. Linked from the README.
+- [`docs/VAXIS_COMMANDS.md`](docs/VAXIS_COMMANDS.md) — a flat, copy-pasteable reference
+  for every command and flag.
 
 ### Changed
 
@@ -49,3 +51,7 @@ This file starts with the release below. For anything earlier, see the
   contract and docs had not caught up. No user-visible behavior change.
 - Documentation now consistently points at per-diagram sharing: README quickstart, the
   command tables, the core skill, `docs/test-commands.sh`, and the API reference.
+- The installed discovery skill (`skills/vaxis/SKILL.md`) now states explicitly that
+  `vaxis skills get core` reads a file compiled into the local binary and makes no network
+  request, frames that output as tool reference documentation, and lists read-only basics
+  so an agent can orient before loading the full contract.
