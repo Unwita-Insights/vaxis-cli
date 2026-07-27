@@ -133,10 +133,12 @@ skill-data/core/SKILL.md       # authoritative instructions embedded in the bina
   makes a follow-up `POST /api/diagrams/{id}/children` per node, materializing child diagrams.
   A single `generate` can create a parent + many children. Don't break this loop.
 - **`%% vaxis:drill <nodeId>`** Mermaid comments mark nodes that become child diagrams.
-- **`show` enrichment**: `show` makes a second `GET …/chat` call, finds the last `assistant`
-  message, and surfaces it as a synthetic `current_mermaid` field; it also strips `scene_json`
-  (Excalidraw noise) from JSON output. Preserve both behaviors — the assistant depends on
-  `current_mermaid`.
+- **`show` enrichment**: `show` reads `current_mermaid` straight off the `GET /api/diagrams/{id}`
+  response and strips `scene_json` (Excalidraw noise) from JSON output. Preserve both behaviors —
+  the assistant depends on `current_mermaid`. It deliberately does **not** make a second
+  `GET …/chat` call any more: that was an extra round-trip, and taking the last `assistant`
+  message surfaced Ask-mode prose answers as though they were the diagram's Mermaid
+  (`src/commands/diagrams.rs:402`).
 - **`format`** makes no network call — it returns the embedded Mermaid reference spec.
 - **Skill distribution** also makes no network call. `vaxis skills get core` prints the
   embedded authoritative skill exactly; `vaxis install --skills` installs the small discovery
@@ -177,7 +179,7 @@ Endpoints the CLI is coupled to (backend's CURRENT paths):
   `policy`, `explicit`, `is_fresh_generation`, and `viewport`; `intent:"ask"` powers
   `diagrams ask` and returns an `answer` field),
   `POST /api/diagrams/{id}/children`, `POST /api/diagrams/{id}/import`,
-  `GET /api/diagrams/{id}/tree`, `GET /api/diagrams/{id}/chat`,
+  `GET /api/diagrams/{id}/tree`,
   `GET|POST /api/diagrams/{id}/chat/sessions` (sessions list/create),
   `PATCH /api/diagrams/{id}/chat/sessions/{sid}` (session rename),
   `DELETE /api/diagrams/{id}/chat/messages/last` (undo).
