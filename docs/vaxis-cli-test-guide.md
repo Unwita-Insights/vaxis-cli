@@ -211,7 +211,6 @@ vaxis diagrams share $ROOT_DIAGRAM_ID --json
 ```
 
 `--rotate` mints a new link (invalidating the old one); `--revoke` turns sharing off.
-`vaxis apps share $APP_ID --json` now only reports/revokes a *legacy* app-wide link.
 
 ---
 
@@ -277,5 +276,4 @@ vaxis diagrams format --json
 | `✗ Session expired` | Token stale | Run `vaxis login` again |
 | `✗ Diagram not found` | Wrong ID | Run `vaxis diagrams list $APP_ID --json` to find correct ID |
 | `error: unexpected argument ' '` | Space after `\` in multiline command | Put the whole command on one line |
-| `apps share` returns 410 | App-wide share creation is retired (expected) | Use `vaxis diagrams share <diagramId>` instead |
 | `diagrams import` returns 404 | Wrong host / stale deploy | Run `vaxis config show`; confirm the server has `POST /api/diagrams/:id/import` |

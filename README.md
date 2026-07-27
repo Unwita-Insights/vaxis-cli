@@ -58,8 +58,8 @@ vaxis diagrams generate <diagramId> --mermaid "graph TD
     %% vaxis:drill pay
     pay --> db[(PostgreSQL)]"
 
-# 5. Get a shareable link
-vaxis apps share <appId>
+# 5. Get a shareable link for the root diagram
+vaxis diagrams share <diagramId>
 ```
 
 Because `pay` is annotated with `%% vaxis:drill pay`, Vaxis automatically creates a child
@@ -94,7 +94,6 @@ Every command accepts a global `--json` flag for machine-readable output.
 | `vaxis apps create <name> [--description <text>]` | Create an application |
 | `vaxis apps update [id] [--name <n>] [--description <d>]` | Update name/description (interactive if `id` omitted) |
 | `vaxis apps delete [id] [--force]` | Delete an application (interactive if `id` omitted) |
-| `vaxis apps share <id>` | Get or create the public share link |
 
 ### Diagrams
 
@@ -135,6 +134,10 @@ VAXIS_AUTH_URL=http://localhost:3000 vaxis apps list --json
 ---
 
 ## Using Vaxis with AI assistants
+
+New here? The [AI agent quick start](docs/vaxis-agent-quick-start.md) walks the whole path
+end to end — install, skill setup, the first prompt to send your agent, and the snippet that
+keeps diagrams in step with the code as it changes.
 
 Install the bundled discovery skill for Claude, Codex, and other Agent Skills compatible
 hosts:

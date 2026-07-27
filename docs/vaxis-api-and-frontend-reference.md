@@ -83,11 +83,24 @@ All handled internally by Better Auth. No custom code.
 | `GET` | `/api/applications/:id` | — | Full row | application |
 | `PUT` | `/api/applications/:id` | `{ name?, description? }` | `{ ok: true }` | application |
 | `DELETE` | `/api/applications/:id` | — | `{ ok: true }` | application |
-| `GET` | `/api/applications/:id/share` | — | `{ token \| null, created_at \| null }` | application_share |
-| `POST` | `/api/applications/:id/share` | — | `{ token }` (creates or rotates) | application_share |
-| `DELETE` | `/api/applications/:id/share` | — | `{ ok: true }` | application_share |
+| `GET` | `/api/applications/:id/share` | — | `{ token \| null, created_at \| null }` — *web-app only; not CLI-consumed* | application_share |
+| `POST` | `/api/applications/:id/share` | — | **RETIRED** — hard-throws `410 APP_SHARE_DISABLED` | application_share |
+| `DELETE` | `/api/applications/:id/share` | — | `{ ok: true }` — *web-app only; not CLI-consumed* | application_share |
 
-**Share token:** 18 random bytes → base64url (24 chars, 144-bit entropy). `POST` is always create-or-rotate (UPSERT). Old token invalidated immediately.
+**App-wide sharing is retired.** One app link exposes every diagram in the app, so no new
+app-wide link can be minted; `GET`/`DELETE` remain only so a legacy link can be found and
+turned off. The CLI consumes none of these three routes — sharing is per-diagram via
+`GET|POST|DELETE /api/diagrams/:id/share` (see `vaxis diagrams share`).
+
+> ⚠️ Parts of this document still describe app-wide sharing as the live model — the schema
+> table, the ER diagram, and the `/api/public/:token` routes. Those have not been re-verified
+> against the current backend and should be treated as stale on sharing. The per-diagram
+> table is `diagram_share` (`token` PK, `edit_token`, `diagram_id` UNIQUE FK, `created_at`),
+> added in the backend's migration `013_add_diagram_share.sql`. `CLAUDE.md` is authoritative
+> for the routes the CLI actually consumes.
+
+**Share token:** 18 random bytes → base64url (24 chars, 144-bit entropy). For the per-diagram
+route, `POST` is always create-or-rotate (UPSERT). Old token invalidated immediately.
 
 ---
 
@@ -173,8 +186,8 @@ All handled internally by Better Auth. No custom code.
 - `GET /api/diagrams/:id/chat` — load chat history
 - `DELETE /api/diagrams/:id/chat/last` — undo last AI turn
 - `GET /api/diagrams/:id/tree` — bird's-eye / expand-subtree
-- `POST /api/applications/:appId/share` — generate public link
-- `GET /api/applications/:appId/share` — check existing share token
+- ~~`POST /api/applications/:appId/share` — generate public link~~ — **RETIRED** (`410 APP_SHARE_DISABLED`); use `POST /api/diagrams/:id/share` on the root diagram
+- `GET /api/applications/:appId/share` — check for a legacy app-wide token (read/revoke only)
 
 ---
 
@@ -220,8 +233,11 @@ First-time drill (no child yet)
 ### 3. Share a diagram publicly
 ```
 DiagramEditor → Share menu
-  → POST /api/applications/:appId/share  (create or rotate token)
-  → shareable URL: /view/:token
+  → POST /api/diagrams/:rootDiagramId/share   (create-or-ROTATE → { token, edit_token })
+    ^ share the ROOT diagram: its token also unlocks the drill subtree beneath it
+    ^ the old POST /api/applications/:appId/share is RETIRED (410 APP_SHARE_DISABLED)
+  → read-only URL:     /view/:token
+  → collaborative URL: /collab/:edit_token
 
 Public user opens /view/:token
   → GET /api/public/:token  (returns root_diagram.id)
@@ -292,6 +308,6 @@ cli_auth_state         ← independent, short-lived, links to session.token afte
 | DiagramEditor (save) | `PUT /api/diagrams/:id` | diagram |
 | DiagramEditor (AI) | `POST /api/diagrams/:id/generate` | diagram, chat_message |
 | DiagramEditor (drill) | `POST /api/diagrams/:id/children` | diagram, node_child |
-| DiagramEditor (share) | `POST /api/applications/:id/share` | application_share |
+| DiagramEditor (share) | `POST /api/diagrams/:id/share` (create/rotate); also reads + revokes a legacy app-wide link | diagram_share, application_share (legacy) |
 | SharedViewerPage | `GET /api/public/:token/diagrams/:id` | application_share, diagram, node_child |
 | CliAuthPage | `POST /api/cli/complete` | cli_auth_state, session |

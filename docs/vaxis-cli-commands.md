@@ -48,9 +48,6 @@ project and global scope.
 | `vaxis apps create <name> [--description <text>] --json` | Create an application and return its ID. |
 | `vaxis apps update <id> (--name <name> \| --description <text>) --json` | Update an application non-interactively. Without `--json`, omit the ID or update fields to use prompts. |
 | `vaxis apps delete <id> --force --json` | Delete an application non-interactively. Without `--json`, omit the ID or `--force` to use prompts. |
-| `vaxis apps share <id> [--revoke] --json` | Inspect or revoke a legacy app-wide link. New app-wide links are retired. |
-
-Use `vaxis diagrams share`, not `apps share`, for current sharing.
 
 ## Diagrams
 

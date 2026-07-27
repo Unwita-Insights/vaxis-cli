@@ -85,7 +85,6 @@ and paste it in.)
 | `vaxis apps create <name> [-d <desc>]` | Create a project |
 | `vaxis apps update [id] [--name] [--description]` | Edit one (interactive if no id) |
 | `vaxis apps delete [id] [--force]` | Delete one (interactive if no id) |
-| `vaxis apps share <id> [--revoke]` | **Legacy only** — app-wide sharing is retired. Reads/revokes an old link. Use `diagrams share` instead |
 
 ### Diagrams
 

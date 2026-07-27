@@ -246,16 +246,6 @@ pub enum AppsAction {
         #[arg(short, long)]
         force: bool,
     },
-
-    /// Inspect or revoke a legacy app-wide share link (retired — see `diagrams share`)
-    Share {
-        /// Application ID
-        id: String,
-
-        /// Revoke the legacy app-wide link
-        #[arg(long)]
-        revoke: bool,
-    },
 }
 
 #[derive(Subcommand)]
