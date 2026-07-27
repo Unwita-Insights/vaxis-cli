@@ -231,9 +231,11 @@ First-time drill (no child yet)
 ### 3. Share a diagram publicly
 ```
 DiagramEditor → Share menu
-  → POST /api/applications/:appId/share  (RETIRED — 410 APP_SHARE_DISABLED)
-  → sharing is per-diagram now; share the ROOT diagram instead
-  → shareable URL: /view/:token
+  → POST /api/diagrams/:rootDiagramId/share   (create-or-ROTATE → { token, edit_token })
+    ^ share the ROOT diagram: its token also unlocks the drill subtree beneath it
+    ^ the old POST /api/applications/:appId/share is RETIRED (410 APP_SHARE_DISABLED)
+  → read-only URL:     /view/:token
+  → collaborative URL: /collab/:edit_token
 
 Public user opens /view/:token
   → GET /api/public/:token  (returns root_diagram.id)

@@ -73,7 +73,7 @@ jobs:
                - **`generate` is not always an edit**: the server can return `{unchanged:true, answer, …}` (Ask / notice / mode_mismatch). `generate` MUST check `unchanged`/`answer` before reporting success — printing "Generated" over echoed-back Mermaid claims an edit that never happened and discards the answer.
                - **Drill auto-expansion**: after `generate`, the CLI iterates `drills[]` and does `POST /api/diagrams/{id}/children` per node. Don't break this loop.
                - **Per-diagram sharing**: share the ROOT diagram (it unlocks the drill subtree). `diagrams share` GETs first, only POSTs when unshared (POST rotates).
-               - **`show` enrichment**: second `GET …/chat` call surfaces the last assistant message as synthetic `current_mermaid`, and strips `scene_json` from JSON output. Preserve both — the assistant depends on `current_mermaid`.
+               - **`show` enrichment**: `show` reads `current_mermaid` directly off the `GET /api/diagrams/{id}` response and strips `scene_json` from JSON output. Preserve both — the assistant depends on `current_mermaid`. It must NOT make a second `GET …/chat` call: that was removed because it cost an extra round-trip and taking the last `assistant` message surfaced Ask-mode prose answers as though they were the diagram's Mermaid. Flag any re-introduction of that call as **MAJOR**.
                - **`format`** makes NO network call (hardcoded Mermaid reference).
 
             6. **Versioning**
