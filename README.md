@@ -135,6 +135,10 @@ VAXIS_AUTH_URL=http://localhost:3000 vaxis apps list --json
 
 ## Using Vaxis with AI assistants
 
+New here? The [AI agent quick start](docs/vaxis-agent-quick-start.md) walks the whole path
+end to end — install, skill setup, the first prompt to send your agent, and the snippet that
+keeps diagrams in step with the code as it changes.
+
 Install the bundled discovery skill for Claude, Codex, and other Agent Skills compatible
 hosts:
 

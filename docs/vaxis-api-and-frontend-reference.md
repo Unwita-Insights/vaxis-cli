@@ -83,9 +83,9 @@ All handled internally by Better Auth. No custom code.
 | `GET` | `/api/applications/:id` | — | Full row | application |
 | `PUT` | `/api/applications/:id` | `{ name?, description? }` | `{ ok: true }` | application |
 | `DELETE` | `/api/applications/:id` | — | `{ ok: true }` | application |
-| `GET` | `/api/applications/:id/share` | — | `{ token \| null, created_at \| null }` | application_share |
+| `GET` | `/api/applications/:id/share` | — | `{ token \| null, created_at \| null }` — *web-app only; not CLI-consumed* | application_share |
 | `POST` | `/api/applications/:id/share` | — | **RETIRED** — hard-throws `410 APP_SHARE_DISABLED` | application_share |
-| `DELETE` | `/api/applications/:id/share` | — | `{ ok: true }` | application_share |
+| `DELETE` | `/api/applications/:id/share` | — | `{ ok: true }` — *web-app only; not CLI-consumed* | application_share |
 
 **App-wide sharing is retired.** One app link exposes every diagram in the app, so no new
 app-wide link can be minted; `GET`/`DELETE` remain only so a legacy link can be found and
