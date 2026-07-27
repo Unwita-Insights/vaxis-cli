@@ -43,6 +43,10 @@ vaxis install --skills --agent claude --global --yes
 vaxis install --skills --agent codex --global --yes
 ```
 
+`--agent` accepts only `claude`, `codex`, and `agents` — there is no `glm` value.
+For GLM or any other Agent Skills host, use Option A above, or install to the generic
+`AGENTS.md` location with `--agent agents`.
+
 The installed file is a small discovery skill. It tells the agent to load the
 complete instructions that match the installed CLI version:
 

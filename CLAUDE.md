@@ -138,7 +138,7 @@ skill-data/core/SKILL.md       # authoritative instructions embedded in the bina
   the assistant depends on `current_mermaid`. It deliberately does **not** make a second
   `GET …/chat` call any more: that was an extra round-trip, and taking the last `assistant`
   message surfaced Ask-mode prose answers as though they were the diagram's Mermaid
-  (`src/commands/diagrams.rs:402`).
+  (see the `show` handler in `src/commands/diagrams.rs`).
 - **`format`** makes no network call — it returns the embedded Mermaid reference spec.
 - **Skill distribution** also makes no network call. `vaxis skills get core` prints the
   embedded authoritative skill exactly; `vaxis install --skills` installs the small discovery
