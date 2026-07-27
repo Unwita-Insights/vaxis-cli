@@ -75,7 +75,7 @@ src/
     ├── login.rs       # browser device-flow login (start → open browser → poll)
     ├── me.rs / logout.rs
     ├── config.rs      # config set-url / show
-    ├── apps.rs        # applications: list/create/update/delete/share (legacy read+revoke)
+    ├── apps.rs        # applications: list/create/update/delete
     ├── diagrams.rs    # diagrams: list/create/generate/ask/sessions/share/show/tree/undo/rename/delete/import/format
     └── skills.rs      # bundled skill inspection + discovery-skill installation
 
@@ -126,8 +126,9 @@ skill-data/core/SKILL.md       # authoritative instructions embedded in the bina
   Mermaid claims an edit that never happened and throws the answer away. The `--mermaid`
   path never routes to Ask.
 - **Sharing is per-diagram, not per-app.** One diagram link also unlocks the sub-diagrams
-  it drills into, so share the ROOT diagram. App-wide sharing is retired (see contract
-  above) because a single app link exposes every diagram in the app.
+  it drills into, so share the ROOT diagram. App-wide sharing is retired because a single
+  app link exposes every diagram in the app — the CLI exposes no app-share command at all
+  and must not call `/api/applications/{id}/share`.
 - **Drill auto-expansion**: after `generate`, the CLI iterates the server's `drills[]` and
   makes a follow-up `POST /api/diagrams/{id}/children` per node, materializing child diagrams.
   A single `generate` can create a parent + many children. Don't break this loop.
@@ -161,9 +162,7 @@ Endpoints the CLI is coupled to (backend's CURRENT paths):
 - **Auth:** `POST /api/cli/start`, `GET /api/cli/poll?state=`, `POST /api/cli/complete`,
   `Bearer <cli_token>` auth.
 - **Apps:** `GET|POST /api/applications`, `GET|PUT|DELETE /api/applications/{id}`,
-  `GET|DELETE /api/applications/{id}/share` (legacy app-wide link: read + revoke ONLY —
-  `POST` is retired server-side and hard-throws `410 APP_SHARE_DISABLED`, so the CLI must
-  never call it), `GET /api/applications/{id}/diagrams` (list diagrams).
+  `GET /api/applications/{id}/diagrams` (list diagrams).
 - **Diagrams:** `POST /api/diagrams`, `GET|DELETE /api/diagrams/{id}`,
   `PATCH /api/diagrams/{id}` (rename),
   `GET|POST|DELETE /api/diagrams/{id}/share` (per-diagram sharing — the CURRENT share

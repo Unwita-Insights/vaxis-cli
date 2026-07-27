@@ -234,9 +234,6 @@ vaxis apps update <id> --description "New description" --json
 # Delete an application
 vaxis apps delete <id> --force --json
 
-# Inspect or revoke a LEGACY app-wide link (retired — cannot create one)
-vaxis apps share <appId> --json
-vaxis apps share <appId> --revoke --json
 ```
 
 ### Diagrams
@@ -894,21 +891,6 @@ than 4 composite services, or a genuinely small/simple ask, needs no drills.
 edit link. Give people the plain `url` unless they need to edit.
 
 `--revoke` returns `{ "ok": true, "diagram_id": "...", "shared": false }`.
-
-### `vaxis apps share --json`
-App-wide sharing is **retired** — this command can no longer create a link. It only
-reports (and with `--revoke` turns off) a legacy link minted before the cutover:
-```json
-{
-  "id": "app_xxx",
-  "app_share_retired": true,
-  "use_instead": "vaxis diagrams share <diagramId>",
-  "legacy_shared": false
-}
-```
-When `legacy_shared` is `true`, `legacy_url`/`legacy_token` (and the `legacy_edit_*`
-pair) are also present. A legacy link exposes **every** diagram in the app — if you
-find one, tell the user and offer `vaxis apps share <appId> --revoke`.
 
 ### `vaxis diagrams ask --json`
 ```json

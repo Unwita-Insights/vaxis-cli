@@ -245,39 +245,6 @@ Claude sets `focus_node` to the most recently added or most important changed no
 
 ---
 
-## G-07 — Share not in CLI
-
-**Priority: Low**
-
-### What happens today
-Claude finishes designing a full system. The user wants to share it with their team. They must: open the Vaxis web app, find the project, click the share button, copy the link — all manually. Claude cannot give them the link directly at the end of the session.
-
-### The real problem
-The share API exists (`POST /api/applications/:id/share` returns a token) but it is not exposed in the CLI. Claude cannot fulfill SKILL.md Pattern 5 (*"Every design session ends with a shareable link offered to the user"*) because the command to generate that link doesn't exist in the CLI.
-
-### What to build
-Two new CLI commands:
-
-**`vaxis apps share <id> --json`**
-Calls `POST /api/applications/:id/share` (creates or rotates the token) and returns the full shareable URL:
-```json
-{
-  "url": "https://vaxis.dev/view/abc123xyz",
-  "token": "abc123xyz",
-  "created_at": "2026-06-05T10:00:00Z"
-}
-```
-
-**`vaxis apps share revoke <id>`**
-Calls `DELETE /api/applications/:id/share` to invalidate the current token.
-
-At the end of every design session, Claude calls `vaxis apps share <appId> --json` and gives the user the link directly in the chat:
-> *"Here's your shareable link: https://vaxis.dev/view/abc123xyz — anyone with this link can view the full architecture"*
-
-No manual steps needed. This closes the loop on every design session.
-
----
-
 ## Implementation Priority Order
 
 | Order | Gap | Reason |
@@ -286,6 +253,5 @@ No manual steps needed. This closes the loop on every design session.
 | 2 | G-01 Edit feedback loop | Prevents data loss — highest real-world impact |
 | 3 | G-02 Format spec command | Makes Claude reliably produce correct Mermaid |
 | 4 | G-03 Partial Mermaid patch | Protects large diagrams from rewrite errors |
-| 5 | G-07 Share in CLI | Completes the design session flow |
-| 6 | G-04 Checkpoint history | Nice to have — current one-step undo is usually enough |
-| 7 | G-06 Viewport control | Polish — low effort, low impact |
+| 5 | G-04 Checkpoint history | Nice to have — current one-step undo is usually enough |
+| 6 | G-06 Viewport control | Polish — low effort, low impact |

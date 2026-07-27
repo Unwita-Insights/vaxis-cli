@@ -103,8 +103,8 @@ EOF
 vaxis diagrams generate "$AUTH_ID" --mermaid "$AUTH_MERMAID" --json
 
 # ── Phase 7: Share ─────────────────────────────────────────────────────────────
-echo "==> Phase 7: Share app"
-vaxis apps share "$APP_ID" --json
+echo "==> Phase 7: Share root diagram"
+vaxis diagrams share "$ROOT_ID" --json
 
 echo ""
 echo "Done. APP_ID=$APP_ID  ROOT_ID=$ROOT_ID"
