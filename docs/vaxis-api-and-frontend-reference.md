@@ -92,10 +92,12 @@ app-wide link can be minted; `GET`/`DELETE` remain only so a legacy link can be 
 turned off. The CLI consumes none of these three routes — sharing is per-diagram via
 `GET|POST|DELETE /api/diagrams/:id/share` (see `vaxis diagrams share`).
 
-> ⚠️ The rest of this document still describes app-wide sharing as the live model — the
-> schema table, the ER diagram, the `/api/public/:token` routes, and the frontend map below.
-> It has not been re-verified against the current backend and should be treated as stale on
-> sharing. `CLAUDE.md` is authoritative for the routes the CLI actually consumes.
+> ⚠️ Parts of this document still describe app-wide sharing as the live model — the schema
+> table, the ER diagram, and the `/api/public/:token` routes. Those have not been re-verified
+> against the current backend and should be treated as stale on sharing. The per-diagram
+> table is `diagram_share` (`token` PK, `edit_token`, `diagram_id` UNIQUE FK, `created_at`),
+> added in the backend's migration `013_add_diagram_share.sql`. `CLAUDE.md` is authoritative
+> for the routes the CLI actually consumes.
 
 **Share token:** 18 random bytes → base64url (24 chars, 144-bit entropy). For the per-diagram
 route, `POST` is always create-or-rotate (UPSERT). Old token invalidated immediately.
@@ -306,6 +308,6 @@ cli_auth_state         ← independent, short-lived, links to session.token afte
 | DiagramEditor (save) | `PUT /api/diagrams/:id` | diagram |
 | DiagramEditor (AI) | `POST /api/diagrams/:id/generate` | diagram, chat_message |
 | DiagramEditor (drill) | `POST /api/diagrams/:id/children` | diagram, node_child |
-| DiagramEditor (share) | `POST /api/applications/:id/share` | application_share |
+| DiagramEditor (share) | `POST /api/diagrams/:id/share` (create/rotate); also reads + revokes a legacy app-wide link | diagram_share, application_share (legacy) |
 | SharedViewerPage | `GET /api/public/:token/diagrams/:id` | application_share, diagram, node_child |
 | CliAuthPage | `POST /api/cli/complete` | cli_auth_state, session |
