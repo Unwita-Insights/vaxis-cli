@@ -233,7 +233,6 @@ vaxis apps update <id> --description "New description" --json
 
 # Delete an application
 vaxis apps delete <id> --force --json
-
 ```
 
 ### Diagrams

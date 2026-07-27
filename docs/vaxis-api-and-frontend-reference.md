@@ -84,10 +84,21 @@ All handled internally by Better Auth. No custom code.
 | `PUT` | `/api/applications/:id` | `{ name?, description? }` | `{ ok: true }` | application |
 | `DELETE` | `/api/applications/:id` | — | `{ ok: true }` | application |
 | `GET` | `/api/applications/:id/share` | — | `{ token \| null, created_at \| null }` | application_share |
-| `POST` | `/api/applications/:id/share` | — | `{ token }` (creates or rotates) | application_share |
+| `POST` | `/api/applications/:id/share` | — | **RETIRED** — hard-throws `410 APP_SHARE_DISABLED` | application_share |
 | `DELETE` | `/api/applications/:id/share` | — | `{ ok: true }` | application_share |
 
-**Share token:** 18 random bytes → base64url (24 chars, 144-bit entropy). `POST` is always create-or-rotate (UPSERT). Old token invalidated immediately.
+**App-wide sharing is retired.** One app link exposes every diagram in the app, so no new
+app-wide link can be minted; `GET`/`DELETE` remain only so a legacy link can be found and
+turned off. The CLI consumes none of these three routes — sharing is per-diagram via
+`GET|POST|DELETE /api/diagrams/:id/share` (see `vaxis diagrams share`).
+
+> ⚠️ The rest of this document still describes app-wide sharing as the live model — the
+> schema table, the ER diagram, the `/api/public/:token` routes, and the frontend map below.
+> It has not been re-verified against the current backend and should be treated as stale on
+> sharing. `CLAUDE.md` is authoritative for the routes the CLI actually consumes.
+
+**Share token:** 18 random bytes → base64url (24 chars, 144-bit entropy). For the per-diagram
+route, `POST` is always create-or-rotate (UPSERT). Old token invalidated immediately.
 
 ---
 
