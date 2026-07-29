@@ -195,6 +195,24 @@ Exception: **Whole-canvas transform** ("turn this into a hospital system") → t
 
 All commands support `--json` for machine-readable output. Always use `--json` when reading output to make decisions.
 
+### CLI maintenance
+
+```bash
+# Check for updates and upgrade in place (runs npm install -g @unwita-insights/vaxis@latest)
+vaxis upgrade
+vaxis upgrade --json
+# → {"current_version":"0.5.3","latest_version":"0.5.3","up_to_date":true}
+# → {"current_version":"0.5.2","latest_version":"0.5.3","updated":true}
+
+# Remove vaxis from this system (prompts for confirmation)
+vaxis uninstall
+vaxis uninstall --force          # skip confirmation
+vaxis uninstall --force --json   # → {"ok":true}
+```
+
+Both commands require npm in PATH. If npm is not found, a manual instruction is printed.
+These are user-facing maintenance commands; do not invoke them autonomously.
+
 ### Skills
 
 ```bash

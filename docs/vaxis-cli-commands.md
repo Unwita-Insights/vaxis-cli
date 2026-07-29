@@ -85,6 +85,15 @@ project and global scope.
 | `--fresh-generation` | `--mermaid` | Mark new direct Mermaid as eligible for automatic direction selection. |
 | `--viewport-width <n> --viewport-height <n>` | `--mermaid` | Supply the canvas dimensions used for direction decisions. |
 
+## CLI maintenance
+
+| Command | Description |
+|---|---|
+| `vaxis upgrade` | Check npm for the latest version and upgrade in place if a newer release is available. |
+| `vaxis upgrade --json` | Return `{"current_version","latest_version","up_to_date"}` or `{"updated":true}` as JSON. |
+| `vaxis uninstall` | Prompt for confirmation, then run `npm uninstall -g @unwita-insights/vaxis`. |
+| `vaxis uninstall --force` | Skip the confirmation prompt. Required when used with `--json`. |
+
 ## Global flags
 
 | Flag | Description |

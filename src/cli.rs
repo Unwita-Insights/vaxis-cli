@@ -156,6 +156,16 @@ pub enum Commands {
         #[command(subcommand)]
         action: DiagramsAction,
     },
+
+    /// Upgrade vaxis to the latest version
+    Upgrade,
+
+    /// Remove vaxis from your system
+    Uninstall {
+        /// Skip confirmation prompt
+        #[arg(short, long)]
+        force: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
