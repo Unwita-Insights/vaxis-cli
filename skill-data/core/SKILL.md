@@ -310,6 +310,8 @@ vaxis diagrams evaluate --captures <captures.json> --output <report.json> --json
 # Save raw user-provided Mermaid directly (no AI call)
 # Use when the user pastes Mermaid from another tool or provides it directly
 vaxis diagrams import <diagramId> --mermaid "graph TD\n    A[User] --> B[API]" --json
+# Or import from a .mmd file
+vaxis diagrams import <diagramId> --file ./architecture.mmd --json
 ```
 
 ---
@@ -601,6 +603,382 @@ Use when the user pastes raw Mermaid into the chat or provides it from another t
 2. Give the user the link directly in the chat:
    "Here's your shareable link: https://app.vaxis.dev/view/abc123xyz — anyone with this link can view the full architecture."
 ```
+
+### Workflow 17 — Rename a diagram
+
+```
+Use when the user says "rename this diagram", "call it 'X' instead", or "change the diagram name".
+This is distinct from renaming a project (apps update) or a chat session (sessions rename).
+
+1. Identify the target diagram from context, or list if unknown:
+   vaxis diagrams list <appId> --json
+
+2. vaxis diagrams rename <diagramId> "New Name" --json
+   → Returns { "ok": true, "diagram_id": "...", "name": "New Name" }
+
+3. Confirm: "Done — renamed to 'New Name'. Its Mermaid content and child diagrams are unchanged."
+```
+
+### Workflow 18 — Manage conversation sessions on a diagram
+
+```
+Use when the user wants to:
+- See all conversation threads on a diagram
+- Start a fresh session with no prior context
+- Route a question or generate turn to a specific session
+
+List existing sessions:
+   vaxis diagrams sessions list <diagramId> --json
+   → Returns sessions[] with id, title, message_count, is_active.
+     The active session (is_active: 1) receives new turns by default.
+
+Create a new session (clean-slate thread):
+   vaxis diagrams sessions create <diagramId> --title "Refactor pass" --json
+   → Returns { "session": { "id": "sess_xxx", "title": "...", ... } }
+   → Save the id to route future turns to this session.
+
+Route a turn to a specific session:
+   vaxis diagrams ask <diagramId> --prompt "..." --session <sessionId> --json
+   vaxis diagrams generate <diagramId> --prompt "..." --session <sessionId> --json
+
+Rename a session:
+   vaxis diagrams sessions rename <diagramId> <sessionId> "Post-launch review" --json
+
+When to create a new session vs. reuse the active one:
+- Reuse the active session for a continuous design conversation.
+- Create a new session when starting a clearly separate phase (e.g. post-launch review,
+  refactor pass) where the prior conversation history would be misleading context.
+```
+
+---
+
+## Code-to-Diagram Workflows
+
+These workflows cover analysing a codebase and driving the CLI to create or update Vaxis diagrams from source code. The agent reads files; the CLI stores the result. No new CLI commands are required — all steps use existing `vaxis` commands.
+
+### Always-on safety rules for code analysis
+
+Apply these in every code-to-diagram workflow. Before reading any file:
+
+**Skip silently (never read, never mention in diagram labels):**
+- Secrets: `.env`, `.env.*`, `*secret*`, `*credential*`, `*password*`, `*token*`, `*api_key*`, `*.pem`, `*.key`
+- Build output: `node_modules/`, `dist/`, `build/`, `.next/`, `target/`, `__pycache__/`, `.git/`
+- Tests: `*.test.ts`, `*.spec.ts`, `**/__tests__/**`, `*_test.go`, `test_*.py`
+- Binaries: `*.wasm`, `*.so`, `*.dll`, `*.exe`, `*.png`, `*.jpg`, `*.pdf`
+
+Never expose secret values or credentials as diagram node labels.
+
+---
+
+### Workflow 19 — Generate initial architecture diagram from code
+
+```
+Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What does this system look like?"
+
+1. Read the top-level manifest: package.json, Cargo.toml, pom.xml, go.mod, pyproject.toml,
+   docker-compose.yml. If no manifest found → list top-level directories and ask the user
+   "What type of project is this?"
+
+2. Choose diagram shape from detected type:
+   - REST API / web server      → flowchart TB
+   - Event-driven / queue-heavy → flowchart LR
+   - Library / SDK              → classDiagram
+   - DB schema focus            → erDiagram
+   - Default                    → flowchart TB
+
+3. Read entry points (src/main.*, index.*, app.*, server.*). Then list (don't recursively
+   read) sub-directories; pick 3–5 representative files to read.
+
+4. Identify: major components, datastores, external services, inter-component connections.
+
+5. If no existing Vaxis project/diagram for this codebase:
+      vaxis apps create "<project-name>" --json          → save appId
+      vaxis diagrams create <appId> "Architecture Overview" --json   → save diagramId
+
+6. Get the format spec:
+      vaxis diagrams format --json
+   Synthesise Mermaid following all authoring rules. Add %% vaxis:drill <nodeId>
+   for every composite service node (leaf nodes — databases, caches, external APIs — get NO drill).
+
+7. Generate:
+      vaxis diagrams generate <diagramId> --mermaid "<full mermaid>" --json
+
+8. Share:
+      vaxis diagrams share <diagramId> --json    → give user the URL
+
+Edge cases:
+- Unknown project type → ask one focused question, then proceed.
+- 10+ services → group by domain into subgraphs; offer to drill per domain.
+- Existing diagram already exists → run Workflow 21 (drift check) first.
+```
+
+---
+
+### Workflow 20 — Update diagram after code changes (on-demand)
+
+```
+Use when: "I added a notification service, update the diagram" / "Reflect this PR" /
+          "Remove anything that's been deleted" / "Add the new components you find"
+
+1. vaxis diagrams show <diagramId> --json   → read current_mermaid, note every node ID.
+
+2. Identify changed files from the user's description OR:
+      git diff --name-only HEAD~1
+
+3. Read only those files + their direct imports (not the whole codebase).
+
+4. Determine:
+   - New components to add
+   - Connections that changed
+   - Nodes with no corresponding code (stale)
+
+5. If removing stale nodes — confirm first:
+   "I'm about to remove `legacyCache` and `notifyQueue` — they no longer appear in the
+   code. Continue?"
+
+6. Compose updated Mermaid: add new nodes + edges, remove confirmed-stale nodes,
+   preserve EVERY other existing node exactly.
+
+7. vaxis diagrams generate <diagramId> --mermaid "<full updated mermaid>" --json
+
+8. New composite components must have %% vaxis:drill markers → CLI auto-creates child diagrams.
+
+Edge cases:
+- User didn't say what changed → run Workflow 21 (drift detection) first to discover changes.
+- Adding nodes would push total past 50 → suggest splitting into a new drill child instead.
+```
+
+---
+
+### Workflow 21 — Detect drift between diagram and codebase
+
+```
+Use when: "Is the diagram up to date?" / "Check for drift" /
+          automatically before Workflow 20 when no specific change is described.
+
+1. vaxis diagrams show <diagramId> --json   → extract all node IDs and labels from current_mermaid.
+
+2. Re-analyse the codebase (Workflow 19 strategy: manifest + entry points + key files)
+   to identify current real components.
+
+3. Compare:
+   - In diagram but NOT in code → stale
+   - In code but NOT in diagram → missing
+   - Label no longer matches code naming → renamed
+
+4. Report BEFORE touching anything:
+   "I found 3 stale nodes (legacyCache, v1Api) and 2 missing components
+   (metricsService, featureFlags)."
+
+5. Ask: "Shall I update the diagram to reflect these changes?"
+
+If divergence is major (≥40% of nodes stale OR ≥10 missing):
+   Ask: "The diagram has diverged significantly. Shall I:
+         (a) regenerate it from scratch, or
+         (b) merge changes incrementally?"
+   → (a) uses Workflow 19; (b) uses Workflow 20.
+
+Edge cases:
+- No drift found → "The diagram looks up to date. (I may have missed dynamically loaded modules.)"
+```
+
+---
+
+### Workflow 22 — Commit-triggered autonomous update (standing instruction)
+
+```
+Use when: User sets a standing instruction at session start:
+          "Whenever a new commit is available, update the VAXIS diagram automatically."
+
+Run each time a new commit is detected:
+
+1. git log --oneline -1              → latest commit message + hash
+2. git diff HEAD~1 HEAD --name-only  → changed files
+
+3. Classify the commit:
+   ARCHITECTURAL (trigger update):
+     - Manifest changes (package.json, Cargo.toml, go.mod, docker-compose.yml, k8s/*.yaml)
+     - New service directories
+     - Changes to src/main.*, *.config.*
+
+   IMPLEMENTATION-ONLY (skip):
+     - Changes inside existing functions / methods
+     - Test file changes
+     - Docs, style files, comments
+
+4. If implementation-only:
+   Report: "Commit <hash> — implementation change only, diagram not affected." Stop.
+
+5. If architectural:
+   a. vaxis apps list --json                     → find the project
+   b. vaxis diagrams tree <rootId> --json        → understand hierarchy
+   c. vaxis diagrams show <rootId> --json        → read current Mermaid
+   d. Read only the changed files + their direct imports
+   e. Compose minimal edit (add/remove/rename nodes only as needed)
+   f. vaxis diagrams generate <rootId> --mermaid "..." --json
+   g. Report: "Updated diagram for commit <hash>: added metricsService, renamed api → gatewayApi."
+
+Edge cases:
+- Many changed files, impact unclear → lean architectural; better to check and find no
+  change needed than to silently miss a real architectural shift.
+- First commit with no diagram yet → use Workflow 19 instead.
+```
+
+---
+
+### Workflow 23 — Scoped analysis (specific directory or service)
+
+```
+Use when: "Diagram just the payments/ service" / "Show me only the auth module" /
+          "Analyse src/api/ only"
+
+1. Scope ALL file reading to the specified directory. Do not read parent directories.
+
+2. Identify the public interface:
+   - What the directory exports
+   - Which external packages it imports
+   - Any HTTP handlers or message consumers it defines
+
+3. Everything outside the scope → external dependency leaf node (rounded rectangle, no drill).
+
+4. vaxis diagrams generate <diagramId> --mermaid "..." --json
+
+5. After generating:
+   "I've diagrammed payments/. Do you want me to continue with any of the other
+   services? (auth/, notifications/, inventory/)"
+
+Edge cases:
+- Sub-directories with 10+ files → read only the entry file (index.ts, mod.rs, __init__.py)
+  of each sub-directory, unless the user asks for more detail.
+- Specified directory not found → list actual directory names and suggest similar ones.
+```
+
+---
+
+### Workflow 24 — Feature / code flow tracing
+
+```
+Use when: "Diagram the login flow" / "Show how a payment request flows" /
+          "Trace the checkout feature"
+
+1. Find the entry point: search route definitions, command handlers, or functions
+   matching the feature name — look in file names, function names, class names, route paths.
+
+2. If the feature name doesn't match code naming, confirm:
+   "I think 'checkout flow' maps to CartService → OrderController → PurchaseRepository.
+   Does that sound right?"
+
+3. Trace execution: controller → service → repository → external calls.
+   Stop at service/module boundaries; don't recurse into third-party libraries.
+
+4. Choose diagram type:
+   - Component ownership + call direction → flowchart LR
+   - Message sequence between participants → sequenceDiagram
+
+5. vaxis diagrams generate <diagramId> --mermaid "..." --json
+
+Edge cases:
+- 10+ levels deep → stop at service boundary; label remaining as "internal detail omitted."
+- Multiple matching entry points → list them and ask the user to pick one.
+```
+
+---
+
+### Workflow 25 — Monorepo service topology
+
+```
+Use when: "Diagram this monorepo" / "Show all services and how they relate"
+
+1. Detect monorepo structure:
+   - Directory layout: apps/, packages/, services/, libs/
+   - Config files: nx.json (Nx), turbo.json (Turborepo), lerna.json (Lerna)
+
+2. Enumerate all apps/services from the monorepo root or apps/ directory listing.
+
+3. For each service, read ONLY its manifest + entry point:
+   - What it exposes: HTTP port, queue topic, gRPC service, exported package
+   - What it calls: other services, shared packages, external APIs, databases
+
+4. Generate top-level topology: one node per service, edges labelled with protocol
+   (HTTP, gRPC, Kafka, REST, etc.). Add %% vaxis:drill <nodeId> for each service node.
+
+5. vaxis diagrams generate <rootDiagramId> --mermaid "..." --json
+   → CLI auto-creates one drill child per service.
+
+6. Offer to fill each drill child:
+   "Topology created. Which service should I detail first?"
+
+Edge cases:
+- 20+ services → group by domain/team first; show domain nodes with drills; drill into
+  services within each domain in a second pass.
+- Services communicate only via a shared database → show the database as a central
+  cylinder node; note: "Direct service-to-service communication not detected."
+- Polyglot monorepo → label each node with its language: api["API Gateway (Rust)"]
+```
+
+---
+
+### Workflow 26 — Large repository: strategic analysis
+
+```
+Use when: Repository has 200+ files or 30+ directories; reading everything is impractical.
+
+1. Read only the top-level manifest + LIST (don't read into) the top-level directories.
+
+2. Identify the most significant directories by name:
+   src/, lib/, services/, api/, core/, cmd/
+
+3. For each significant directory: read ONLY its own entry file or README.md
+   (not its sub-files or sub-directories).
+
+4. Use CI/CD config files as a structural guide:
+   Dockerfile, docker-compose.yml, k8s/*.yaml
+
+5. Generate a high-level diagram with major areas as nodes (deliberately not exhaustive).
+
+6. Report:
+   "This is a large codebase. I've mapped the top-level structure. Want me to dive
+   deeper into any specific area?"
+   → Use Workflow 23 (scoped analysis) for each area the user wants detailed.
+
+Edge cases:
+- No manifest or Dockerfile found → ask:
+  "What's the main entry point, and what kind of project is this?"
+  before proceeding.
+```
+
+---
+
+### Workflow 27 — CI/CD pipeline usage
+
+```
+Use when: Agent runs inside a CI step (non-interactive, fully scripted environment).
+
+Required setup:
+- VAXIS_AUTH_URL env var set to the Vaxis server URL.
+- Auth token pre-provisioned: run `vaxis login` once interactively and commit the
+  resulting config, or store the token as a CI secret and write it to the config path.
+- ALL CLI calls must include --json (disables interactive pickers and confirms).
+- ALL calls requiring an ID must supply it explicitly — no interactive fallback in CI.
+
+Pattern:
+   export VAXIS_AUTH_URL="https://app.vaxis.dev"
+   vaxis me --json                                      # verify auth
+   vaxis diagrams show <diagramId> --json               # read current state
+   # agent analyses changed files, composes Mermaid
+   vaxis diagrams generate <diagramId> --mermaid "..." --json
+
+Exit 0 on success. Non-zero exit from any CLI call → CI step fails (expected for
+unresolvable errors such as 401, network failure, or malformed Mermaid).
+```
+
+---
+
+### Roadmap items (not yet implemented — document for awareness)
+
+**Watch mode (UC-109):** `vaxis sync --watch` is not yet available. Current equivalent: set a standing commit-trigger instruction (Workflow 22) at the start of a session.
+
+**Branch diff (UC-108):** Use Workflow 19 twice — once per branch (via `git stash` / `git checkout`) — to produce two diagrams. Compare their node lists in prose to surface architectural differences between branches.
 
 ---
 
@@ -905,6 +1283,21 @@ edit link. Give people the plain `url` unless they need to edit.
   "active_chat_session_id": "sess_xxx"
 }
 ```
+
+### `vaxis diagrams sessions create --json`
+```json
+{
+  "session": {
+    "id": "sess_xxx",
+    "title": "Refactor pass",
+    "is_active": 0,
+    "message_count": 0,
+    "created_at": "...",
+    "updated_at": "..."
+  }
+}
+```
+Use the returned `session.id` with `--session` on subsequent `ask` or `generate --prompt` calls to route that turn into this thread.
 
 ### `vaxis diagrams list --json`
 ```json

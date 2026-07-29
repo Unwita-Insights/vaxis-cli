@@ -21,7 +21,7 @@ echo "    ROOT_ID=$ROOT_ID"
 # ── Phase 3: Root Diagram ─────────────────────────────────────────────────────
 echo "==> Phase 3: Generate root diagram"
 
-# %% vaxis:drill must appear immediately after the node it annotates
+# %% vaxis:drill markers must be at column 0, after the complete diagram block
 read -r -d '' ROOT_MERMAID <<'EOF'
 graph TD
     subgraph Frontend
@@ -31,9 +31,7 @@ graph TD
     subgraph Backend
         api[API Gateway]
         auth[Auth Service]
-        %% vaxis:drill auth
         pay[Payment Service]
-        %% vaxis:drill pay
         notify[Notification Service]
     end
     db[(PostgreSQL)]
@@ -46,6 +44,8 @@ graph TD
     pay -->|reads| cache
     pay -->|writes| db
     auth --> db
+%% vaxis:drill auth
+%% vaxis:drill pay
 EOF
 
 GENERATE_OUT=$(vaxis diagrams generate "$ROOT_ID" --mermaid "$ROOT_MERMAID" --json)

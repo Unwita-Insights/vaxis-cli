@@ -11,15 +11,35 @@ pub fn run(action: ConfigAction, json: bool) {
             let mut cfg = config::load();
             cfg.auth_url = Some(url.clone());
             config::save(&cfg);
-            println!("{} Server URL set to {}", "✓".green().bold(), url.cyan());
+            if json {
+                println!("{}", serde_json::json!({"ok": true, "auth_url": url}));
+            } else {
+                println!("{} Server URL set to {}", "✓".green().bold(), url.cyan());
+            }
         }
         ConfigAction::SetMode { mode } => {
-            let mode = mode.as_str();
             let mut cfg = config::load();
-            cfg.generation_mode = Some(mode.to_string());
-            config::save(&cfg);
-            let human = if mode == "prompt" { "Vaxis server AI" } else { "your own AI (Claude / Codex)" };
-            println!("{} Generation mode set to {} ({})", "✓".green().bold(), mode.cyan(), human);
+            match mode.as_str() {
+                Some(mode_str) => {
+                    cfg.generation_mode = Some(mode_str.to_string());
+                    config::save(&cfg);
+                    let human = if mode_str == "prompt" { "Vaxis server AI" } else { "your own AI (Claude / Codex)" };
+                    if json {
+                        println!("{}", serde_json::json!({"ok": true, "generation_mode": mode_str}));
+                    } else {
+                        println!("{} Generation mode set to {} ({})", "✓".green().bold(), mode_str.cyan(), human);
+                    }
+                }
+                None => {
+                    cfg.generation_mode = None;
+                    config::save(&cfg);
+                    if json {
+                        println!("{}", serde_json::json!({"ok": true, "generation_mode": null}));
+                    } else {
+                        println!("{} Generation mode cleared — you'll be asked on next generate.", "✓".green().bold());
+                    }
+                }
+            }
         }
         ConfigAction::Show => {
             let cfg = config::load();
