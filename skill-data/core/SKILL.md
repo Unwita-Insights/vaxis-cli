@@ -436,12 +436,26 @@ Use this when the user says "add a notification service" or "add Redis caching" 
 ### Workflow 7 — Undo and retry
 
 ```
+Single undo (most common):
 1. vaxis diagrams undo <diagramId> --json
    → Removes last AI turn from chat history
 
 2. Confirm to user: "Undone — I'll regenerate with [the corrected instruction]."
 
 3. vaxis diagrams generate <diagramId> --mermaid "<corrected-mermaid>" --json
+
+Multi-step undo — reverting several bad turns (UC-63):
+- Call undo once per turn you want to roll back, in sequence.
+- After each undo: vaxis diagrams show <diagramId> --json → check current_mermaid to
+  confirm you've reached the desired state before stopping.
+- Do NOT re-generate between undo calls; undo first, then regenerate once at the end.
+  Example: 3 bad turns → undo → undo → undo → [verify] → generate.
+
+Undo after sharing (UC-64):
+- The share link is NOT affected by undo. It still points to the diagram.
+- After undoing, the shared page will immediately reflect the rolled-back content.
+- Warn user if the diagram was shared before undoing: "Note — anyone with the share
+  link will now see the rolled-back version."
 ```
 
 ### Workflow 8 — Rename or update a project
@@ -597,11 +611,38 @@ Use when the user pastes raw Mermaid into the chat or provides it from another t
 ### Workflow 16 — End session with shareable link
 
 ```
+Get or create the share link (UC-68, UC-69):
 1. vaxis diagrams share <rootDiagramId> --json
-   → Returns { "url": "https://app.vaxis.dev/view/abc123xyz", ... }
+   → Returns { "url": "...", "edit_url": "...", "rotated": false }
+   A plain share call is non-destructive: returns the existing link if one already exists.
 
-2. Give the user the link directly in the chat:
-   "Here's your shareable link: https://app.vaxis.dev/view/abc123xyz — anyone with this link can view the full architecture."
+2. Give the user both links:
+   "View link (read-only): https://app.vaxis.dev/view/abc123
+    Edit link (collaborative): https://app.vaxis.dev/collab/xyz789
+    Share the view link with your team. Use the edit link to invite co-editors."
+
+Revoke sharing (UC-71):
+   vaxis diagrams share <diagramId> --revoke --json
+   → Returns { "ok": true, "shared": false }
+   Warn before revoking: "This will make the diagram private immediately. Anyone with
+   the current link will get a 404. Continue?"
+   After revoking: confirm "Sharing revoked — the diagram is now private."
+
+Rotate share link (UC-70) — use only when user explicitly requests:
+   vaxis diagrams share <diagramId> --rotate --json
+   Warn: "This invalidates the old link. Anyone you shared it with will need the new one."
+
+Collaborative editing — edit link explanation (UC-74):
+   The edit_url (also called edit_token in the response) enables real-time co-editing
+   in the browser. Mention it when finishing a design session with collaborators:
+   "Your team can co-edit live at: <edit_url>"
+
+Stale-state warning for concurrent edits (UC-72):
+   Today the server uses last-write-wins (no conflict detection). If you know another
+   user is editing the same diagram, read current_mermaid just before generating to
+   confirm the base state matches what you expect. Warn the user:
+   "Note — if someone else is editing this diagram simultaneously, your changes may
+   overwrite theirs. Refresh and re-read before making critical edits."
 ```
 
 ### Workflow 17 — Rename a diagram
@@ -979,6 +1020,171 @@ unresolvable errors such as 401, network failure, or malformed Mermaid).
 **Watch mode (UC-109):** `vaxis sync --watch` is not yet available. Current equivalent: set a standing commit-trigger instruction (Workflow 22) at the start of a session.
 
 **Branch diff (UC-108):** Use Workflow 19 twice — once per branch (via `git stash` / `git checkout`) — to produce two diagrams. Compare their node lists in prose to surface architectural differences between branches.
+
+---
+
+### Workflow 28 — Handle Mermaid lint errors
+
+```
+Use when: vaxis diagrams generate returns an error indicating invalid Mermaid syntax.
+The CLI lints Mermaid before sending. Common error fields: error, issues[].
+
+1. Parse the error response:
+   { "error": "mermaid_lint_failed", "issues": ["<description>", ...] }
+
+2. Report to user which specific issues were found:
+   "The diagram has a syntax error: <issue description>. Fixing before regenerating."
+
+3. Fix the specific issue in the Mermaid:
+
+   Unclosed subgraph
+   → Find every `subgraph ... ` without a matching `end` — add the missing `end`.
+
+   Space in node ID (e.g. `my node[My Node]`)
+   → Replace spaces in the ID part with underscores: `my_node[My Node]`.
+
+   Drill marker not at end of diagram / between nodes
+   → Move ALL %% vaxis:drill lines to AFTER the last diagram node/edge definition.
+
+   Unknown node ID in a drill marker (%% vaxis:drill <id>)
+   → The node ID must exist in the diagram. Either correct the ID or remove the marker.
+
+   Invalid arrow syntax
+   → Use only: -->, --->, -.->., ==>, --text-->, for flowcharts.
+
+4. Retry with the corrected Mermaid:
+   vaxis diagrams generate <diagramId> --mermaid "<fixed-mermaid>" --json
+
+5. If the same error recurs after one fix attempt:
+   - Call vaxis diagrams format --json to get the full authoritative spec.
+   - Show the user the relevant rule and ask for clarification.
+```
+
+---
+
+### Workflow 29 — Pre-generation validation (limits & type checks)
+
+```
+Run this checklist BEFORE every generate call to catch violations proactively.
+
+─── Node limit (UC-57, 50-node cap) ────────────────────────────────────────
+Count all node definitions in the Mermaid (lines matching `<id>[...]`, `<id>(...)`, etc.):
+  - 45–50 nodes → warn user: "This diagram is near the 50-node limit. Consider splitting
+    some composite nodes into drill children instead of adding more."
+  - > 50 nodes → restructure FIRST; do not generate.
+    Move the overflow nodes into a new child diagram under a drill marker.
+
+─── Edge limit (UC-58, 60-edge cap) ─────────────────────────────────────────
+Count all edge definitions (lines containing -->, -.->, ==>, etc.):
+  - > 55 edges → warn and suggest routing via intermediate hub/bus/gateway nodes
+    to reduce direct connections.
+
+─── Fan-out cap (UC-59, max 4 connections per node) ─────────────────────────
+For each node, count total connections (both in-bound and out-bound arrows):
+  - Any node with > 4 total connections → restructure before generating.
+    Pattern: introduce a Bus, Gateway, or Queue node between the hub and its overflow targets.
+    e.g. if api connects to 6 services → api --> serviceBus[(Service Bus)] --> each service.
+
+─── Diagram type vs. drills (UC-60) ─────────────────────────────────────────
+If the Mermaid contains any %% vaxis:drill lines AND the first keyword is NOT
+`flowchart` or `graph`:
+  - Strip all %% vaxis:drill lines from the output before generating.
+  - Inform user: "Drill blocks only work on flowchart diagrams — drill markers removed
+    from this <type> diagram."
+
+─── Supported diagram type (UC-61) ──────────────────────────────────────────
+Confirm the first keyword is one of the known supported types (see Mermaid format
+reference section below). If not recognised:
+  - Do not guess. Ask: "This diagram type isn't supported by Vaxis. Should I switch
+    to `flowchart TB`?"
+
+─── When to call vaxis diagrams format --json (UC-87) ───────────────────────
+The inline Mermaid reference in this skill is sufficient for normal authoring.
+Call `vaxis diagrams format --json` only when:
+  - You are uncertain about shape syntax for an unusual node type.
+  - The CLI version may have changed and you need the version-locked spec.
+  - You are in a CI environment and cannot load this skill file.
+```
+
+---
+
+### Workflow 30 — Timeout, rate-limit, and partial-failure recovery
+
+```
+─── Server timeout (UC-76) ──────────────────────────────────────────────────
+When a generate --prompt call times out (no response after ~30 s):
+
+1. Do NOT retry immediately.
+2. Tell user: "The server timed out generating the diagram. The diagram may be in a
+   partial state."
+3. Run: vaxis diagrams show <diagramId> --json → check current_mermaid.
+   - If current_mermaid changed (partial result saved) → offer to undo first:
+     vaxis diagrams undo <diagramId> --json
+   - If current_mermaid is unchanged → safe to retry directly.
+4. Prefer --mermaid path on retry (bypasses server AI, avoids re-triggering the timeout).
+
+─── Rate limiting — 429 (UC-77) ─────────────────────────────────────────────
+When any CLI call returns HTTP 429 or an error mentioning rate limit:
+
+1. Do NOT silently retry in a loop.
+2. Tell user: "Vaxis has temporarily rate-limited this request. Please wait ~30 seconds
+   before retrying."
+3. On retry: if the original call used --prompt, switch to --mermaid if possible
+   (the --mermaid path bypasses the server AI's generation quota).
+4. If rate-limiting persists: advise user to check their account quota on the Vaxis dashboard.
+
+─── Partial drill creation failure (UC-79) ──────────────────────────────────
+After generate --mermaid returns, inspect the drills[] array in the JSON response:
+   { "mermaid": "...", "drills": [ { "node_id": "auth", "diagram_id": "diag_abc" },
+                                    { "node_id": "pay",  "diagram_id": null, "error": "..." } ] }
+
+- diagram_id present → child was created successfully.
+- diagram_id null / error present → child creation failed.
+
+Report clearly:
+  "Root diagram updated. Child diagrams created: auth, inventory.
+   Failed to create: pay (network error). Shall I retry creating the pay child?"
+
+To retry a failed child individually:
+   vaxis diagrams generate <parentId> --mermaid "<same-mermaid-with-drill-for-pay>" --json
+   → The server re-processes only the drill nodes that don't yet have children.
+```
+
+---
+
+### Workflow 31 — End of session summary and health checks
+
+```
+─── Session summary (UC-95) ─────────────────────────────────────────────────
+Run at the end of any design session when the user asks "what did we build?" or
+when wrapping up after several generate calls:
+
+1. vaxis diagrams tree <rootId> --json → list full hierarchy with all children.
+2. For each child diagram, note whether current_mermaid is populated or null (empty).
+3. Summarise in plain English — never dump raw Mermaid:
+   "We designed the Payment System with 3 sub-diagrams:
+    ✓ API Gateway — detailed
+    ✓ Auth Service — detailed
+    ○ Order Service — still empty
+   View the full architecture: <share url>"
+4. Offer to fill any empty child: "Want me to detail the Order Service next?"
+
+─── Schema drift health check (UC-102) ──────────────────────────────────────
+Run vaxis diagrams rules-check --json when:
+  - You suspect the CLI may be out of date with the server.
+  - The server has started returning unexpected field names or shapes.
+  - You are onboarding a new team and want to confirm CLI + server alignment.
+
+   vaxis diagrams rules-check --json
+   → Compares the embedded authoring rules in the CLI binary against the server's
+     live rules endpoint.
+   → { "match": true } = in sync; no action needed.
+   → { "match": false, "diffs": [...] } = drift detected.
+     Report to user: "The CLI's embedded rules differ from the Vaxis server. Some
+     diagram authoring rules may be outdated. Consider upgrading: npm i -g @unwita-insights/vaxis"
+
+Do NOT run rules-check on every request — it is a diagnostic command, not a pre-flight check.
+```
 
 ---
 
