@@ -26,11 +26,11 @@ pub async fn run(action: AppsAction, json: bool) {
         AppsAction::List => list(&token, json).await,
         AppsAction::Create { name, description } => create(&token, &name, description.as_deref(), json).await,
         AppsAction::Update { id, name, description } => {
-            let resolved = resolve_id(&token, id, "Select application to update:").await;
+            let resolved = resolve_id(&token, id, "Select application to update:", json).await;
             update(&token, &resolved, name.as_deref(), description.as_deref(), json).await;
         }
         AppsAction::Delete { id, force } => {
-            let resolved = resolve_id(&token, id, "Select application to delete:").await;
+            let resolved = resolve_id(&token, id, "Select application to delete:", json).await;
             delete(&token, &resolved, force, json).await;
         }
     }
@@ -74,12 +74,12 @@ fn fail_json(message: &str) -> ! {
 }
 
 // Fetches app list and lets user pick if no id was provided on the command line.
-async fn resolve_id(token: &str, id: Option<String>, prompt: &str) -> String {
+async fn resolve_id(token: &str, id: Option<String>, prompt: &str, json: bool) -> String {
     if let Some(id) = id {
         return id;
     }
 
-    let apps = fetch_apps(token).await;
+    let apps = fetch_apps(token, json).await;
     if apps.is_empty() {
         println!("{}", "No applications found.".dimmed());
         std::process::exit(0);
@@ -106,7 +106,7 @@ async fn resolve_id(token: &str, id: Option<String>, prompt: &str) -> String {
     apps[idx]["id"].as_str().unwrap_or("").to_string()
 }
 
-async fn fetch_apps(token: &str) -> Vec<serde_json::Value> {
+async fn fetch_apps(token: &str, json: bool) -> Vec<serde_json::Value> {
     let client = reqwest::Client::new();
     let resp = match client
         .get(format!("{}/api/applications", crate::config::base_url()))
@@ -116,13 +116,15 @@ async fn fetch_apps(token: &str) -> Vec<serde_json::Value> {
     {
         Ok(r) => r,
         Err(_) => {
-            eprintln!("{} Could not reach server.", "✗".red());
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
             std::process::exit(1);
         }
     };
 
     if resp.status() == 401 {
-        eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow());
+        if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+        else { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); }
         std::process::exit(1);
     }
 
@@ -130,7 +132,7 @@ async fn fetch_apps(token: &str) -> Vec<serde_json::Value> {
 }
 
 async fn list(token: &str, json: bool) {
-    let apps = fetch_apps(token).await;
+    let apps = fetch_apps(token, json).await;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&apps).unwrap_or_default());
@@ -166,15 +168,32 @@ async fn create(token: &str, name: &str, description: Option<&str>, json: bool) 
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
 
-    if resp.status() == 401 {
-        eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow());
-        std::process::exit(1);
-    }
-
+    let status = resp.status().as_u16();
     let app: serde_json::Value = resp.json().await.unwrap_or_default();
+
+    match status {
+        401 => {
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); }
+            std::process::exit(1);
+        }
+        200 | 201 => {}
+        s => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&app).unwrap_or_default());
+            } else {
+                eprintln!("{} Unexpected status {}.", "✗".red(), s);
+            }
+            std::process::exit(1);
+        }
+    }
 
     if json {
         println!("{}", serde_json::to_string_pretty(&app).unwrap_or_default());
@@ -189,7 +208,7 @@ async fn create(token: &str, name: &str, description: Option<&str>, json: bool) 
     );
 }
 
-async fn fetch_app(token: &str, id: &str) -> serde_json::Value {
+async fn fetch_app(token: &str, id: &str, json: bool) -> serde_json::Value {
     let client = reqwest::Client::new();
     let resp = match client
         .get(format!("{}/api/applications/{}", crate::config::base_url(), id))
@@ -198,10 +217,22 @@ async fn fetch_app(token: &str, id: &str) -> serde_json::Value {
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
-    if resp.status() == 404 { eprintln!("{} Application not found.", "✗".red()); std::process::exit(1); }
-    if resp.status() == 401 { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); std::process::exit(1); }
+    if resp.status() == 404 {
+        if json { println!("{}", serde_json::json!({"error": "not_found"})); }
+        else { eprintln!("{} Application not found.", "✗".red()); }
+        std::process::exit(1);
+    }
+    if resp.status() == 401 {
+        if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+        else { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); }
+        std::process::exit(1);
+    }
     resp.json().await.unwrap_or_default()
 }
 
@@ -214,7 +245,7 @@ async fn update(token: &str, id: &str, name: Option<&str>, description: Option<&
         )
     } else {
         // Interactive mode — fetch current values and let user edit them
-        let current = fetch_app(token, id).await;
+        let current = fetch_app(token, id, json).await;
         let current_name = current["name"].as_str().unwrap_or("").to_string();
         let current_desc = current["description"].as_str().unwrap_or("").to_string();
 
@@ -265,12 +296,24 @@ async fn update(token: &str, id: &str, name: Option<&str>, description: Option<&
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
 
     match resp.status().as_u16() {
-        401 => { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); std::process::exit(1); }
-        404 => { eprintln!("{} Application not found.", "✗".red()); std::process::exit(1); }
+        401 => {
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); }
+            std::process::exit(1);
+        }
+        404 => {
+            if json { println!("{}", serde_json::json!({"error": "not_found"})); }
+            else { eprintln!("{} Application not found.", "✗".red()); }
+            std::process::exit(1);
+        }
         200 => {
             if json {
                 println!("{}", serde_json::json!({"ok": true, "id": id}));
@@ -281,12 +324,16 @@ async fn update(token: &str, id: &str, name: Option<&str>, description: Option<&
                 println!("{} Updated {} — {}", "✓".green().bold(), id.dimmed(), parts.join(", "));
             }
         }
-        s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+        s => {
+            if json { println!("{}", serde_json::json!({"error": "unexpected_status", "status": s})); }
+            else { eprintln!("{} Unexpected status {}.", "✗".red(), s); }
+            std::process::exit(1);
+        }
     }
 }
 
 async fn delete(token: &str, id: &str, force: bool, json: bool) {
-    if !force {
+    if !force && !json {
         let confirmed = Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt(format!("Delete application {}? This cannot be undone.", id.yellow()))
             .default(false)
@@ -306,12 +353,24 @@ async fn delete(token: &str, id: &str, force: bool, json: bool) {
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
 
     match resp.status().as_u16() {
-        401 => { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); std::process::exit(1); }
-        404 => { eprintln!("{} Application not found.", "✗".red()); std::process::exit(1); }
+        401 => {
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); }
+            std::process::exit(1);
+        }
+        404 => {
+            if json { println!("{}", serde_json::json!({"error": "not_found"})); }
+            else { eprintln!("{} Application not found.", "✗".red()); }
+            std::process::exit(1);
+        }
         200 => {
             if json {
                 println!("{}", serde_json::json!({"ok": true, "id": id}));
@@ -319,6 +378,10 @@ async fn delete(token: &str, id: &str, force: bool, json: bool) {
                 println!("{} Deleted {}", "✓".green().bold(), id.dimmed());
             }
         }
-        s   => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+        s => {
+            if json { println!("{}", serde_json::json!({"error": "unexpected_status", "status": s})); }
+            else { eprintln!("{} Unexpected status {}.", "✗".red(), s); }
+            std::process::exit(1);
+        }
     }
 }

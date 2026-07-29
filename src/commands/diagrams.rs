@@ -179,13 +179,16 @@ pub async fn run(action: DiagramsAction, json: bool) {
         DiagramsAction::Undo { id }               => undo(&token, &id, json).await,
         DiagramsAction::Rename { id, name }       => rename(&token, &id, &name, json).await,
         DiagramsAction::Delete { id, app_id, force } => {
-            let resolved = resolve_diagram_id(&token, id, app_id, "Select diagram to delete:").await;
+            let resolved = resolve_diagram_id(&token, id, app_id, "Select diagram to delete:", json).await;
             delete(&token, &resolved, force, json).await;
         }
         DiagramsAction::Format                 => format_cmd(json),
         DiagramsAction::RulesCheck             => rules_check(&token, json).await,
         DiagramsAction::Evaluate { captures, output } => evaluate_cmd(&captures, output.as_deref()),
-        DiagramsAction::Import { id, mermaid } => import_cmd(&token, &id, &mermaid, json).await,
+        DiagramsAction::Import { id, mermaid, file } => {
+            let content = resolve_import_content(mermaid, file, json);
+            import_cmd(&token, &id, &content, json).await;
+        }
     }
 }
 
@@ -200,6 +203,11 @@ fn validate_json_arguments(action: &DiagramsAction, json: bool) {
         }
         if !force {
             fail_json("`--force` is required with `--json`");
+        }
+    }
+    if let DiagramsAction::Import { mermaid, file, .. } = action {
+        if mermaid.is_none() && file.is_none() {
+            fail_json("provide `--mermaid` or `--file`");
         }
     }
 }
@@ -220,6 +228,7 @@ async fn resolve_diagram_id(
     id: Option<String>,
     app_id: Option<String>,
     prompt: &str,
+    json: bool,
 ) -> String {
     if let Some(id) = id {
         return id;
@@ -228,7 +237,7 @@ async fn resolve_diagram_id(
     let app_id = match app_id {
         Some(a) => a,
         None => {
-            let apps = fetch_apps(token).await;
+            let apps = fetch_apps(token, json).await;
             if apps.is_empty() {
                 println!("{}", "No applications found.".dimmed());
                 std::process::exit(0);
@@ -246,7 +255,7 @@ async fn resolve_diagram_id(
         }
     };
 
-    let diagrams = fetch_diagrams(token, &app_id).await;
+    let diagrams = fetch_diagrams(token, &app_id, json).await;
     if diagrams.is_empty() {
         println!("{}", "No diagrams found in this application.".dimmed());
         std::process::exit(0);
@@ -266,7 +275,7 @@ async fn resolve_diagram_id(
     diagrams[idx]["id"].as_str().unwrap_or("").to_string()
 }
 
-async fn fetch_apps(token: &str) -> Vec<serde_json::Value> {
+async fn fetch_apps(token: &str, json: bool) -> Vec<serde_json::Value> {
     let client = reqwest::Client::new();
     let resp = match client
         .get(format!("{}/api/applications", crate::config::base_url()))
@@ -275,16 +284,21 @@ async fn fetch_apps(token: &str) -> Vec<serde_json::Value> {
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
     if resp.status() == 401 {
-        eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow());
+        if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+        else { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); }
         std::process::exit(1);
     }
     resp.json().await.unwrap_or_default()
 }
 
-async fn fetch_diagrams(token: &str, app_id: &str) -> Vec<serde_json::Value> {
+async fn fetch_diagrams(token: &str, app_id: &str, json: bool) -> Vec<serde_json::Value> {
     let client = reqwest::Client::new();
     // Diagrams are listed under the application (root diagrams only). The old
     // `GET /api/diagrams?applicationId=` route was removed in the backend refactor.
@@ -295,33 +309,71 @@ async fn fetch_diagrams(token: &str, app_id: &str) -> Vec<serde_json::Value> {
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
     match resp.status().as_u16() {
         401 => {
-            eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow());
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); }
             std::process::exit(1);
         }
-        404 => { eprintln!("{} Application not found.", "✗".red()); std::process::exit(1); }
+        404 => {
+            if json { println!("{}", serde_json::json!({"error": "not_found", "message": "application not found"})); }
+            else { eprintln!("{} Application not found.", "✗".red()); }
+            std::process::exit(1);
+        }
         200 => {}
-        s => { eprintln!("{} Could not list diagrams (HTTP {}).", "✗".red(), s); std::process::exit(1); }
+        s => {
+            if json { println!("{}", serde_json::json!({"error": "unexpected_status", "status": s})); }
+            else { eprintln!("{} Could not list diagrams (HTTP {}).", "✗".red(), s); }
+            std::process::exit(1);
+        }
     }
     // Report a non-array body instead of silently collapsing it to an empty list
     // (previously `unwrap_or_default()` hid moved endpoints / error objects).
     match resp.json::<serde_json::Value>().await {
         Ok(serde_json::Value::Array(arr)) => arr,
         _ => {
-            eprintln!("{} Unexpected response from server (expected a diagram list).", "✗".red());
+            if json { println!("{}", serde_json::json!({"error": "unexpected_response"})); }
+            else { eprintln!("{} Unexpected response from server (expected a diagram list).", "✗".red()); }
             std::process::exit(1);
         }
     }
 }
 
+/// Fetch the current Mermaid content of a diagram from the server.
+/// Returns None on any error (network, auth, empty diagram) — callers treat
+/// it as "no canvas context available" and proceed without it.
+async fn fetch_current_mermaid(token: &str, id: &str) -> Option<String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{}/api/diagrams/{}", crate::config::base_url(), id))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .ok()?;
+    if resp.status().as_u16() != 200 { return None; }
+    let diagram: serde_json::Value = resp.json().await.ok()?;
+    let m = diagram["current_mermaid"].as_str()?;
+    let m = m.trim();
+    if m.is_empty() || m == "flowchart TB" { return None; }
+    Some(m.to_string())
+}
+
 async fn list(token: &str, app_id: &str, json: bool) {
-    let diagrams = fetch_diagrams(token, app_id).await;
+    let diagrams = fetch_diagrams(token, app_id, json).await;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&diagrams).unwrap_or_default());
+        let cleaned: Vec<serde_json::Value> = diagrams.iter().map(|d| {
+            let mut d = d.clone();
+            if let Some(obj) = d.as_object_mut() { obj.remove("scene_json"); }
+            d
+        }).collect();
+        println!("{}", serde_json::to_string_pretty(&cleaned).unwrap_or_default());
         return;
     }
 
@@ -342,7 +394,7 @@ async fn list(token: &str, app_id: &str, json: bool) {
         }
     }
     println!("{}", "─".repeat(56).dimmed());
-    println!("  {} diagram{}", diagrams.len().to_string().cyan(), if diagrams.len() == 1 { "" } else { "s" });
+    println!("  {} diagram{} {}", diagrams.len().to_string().cyan(), if diagrams.len() == 1 { "" } else { "s" }, "(root only)".dimmed());
 }
 
 async fn create(token: &str, app_id: &str, name: &str, json: bool) {
@@ -355,15 +407,32 @@ async fn create(token: &str, app_id: &str, name: &str, json: bool) {
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
 
-    if resp.status() == 401 {
-        eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow());
-        std::process::exit(1);
-    }
-
+    let status = resp.status().as_u16();
     let diagram: serde_json::Value = resp.json().await.unwrap_or_default();
+
+    match status {
+        401 => {
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); }
+            std::process::exit(1);
+        }
+        200 | 201 => {}
+        s => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&diagram).unwrap_or_default());
+            } else {
+                eprintln!("{} Unexpected status {}.", "✗".red(), s);
+            }
+            std::process::exit(1);
+        }
+    }
 
     if json {
         println!("{}", serde_json::to_string_pretty(&diagram).unwrap_or_default());
@@ -388,12 +457,24 @@ async fn show(token: &str, id: &str, json: bool) {
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
 
     match resp.status().as_u16() {
-        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
-        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        401 => {
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired.", "✗".red()); }
+            std::process::exit(1);
+        }
+        404 => {
+            if json { println!("{}", serde_json::json!({"error": "not_found"})); }
+            else { eprintln!("{} Diagram not found.", "✗".red()); }
+            std::process::exit(1);
+        }
         _ => {}
     }
 
@@ -409,9 +490,10 @@ async fn show(token: &str, id: &str, json: bool) {
         if let Some(ref mermaid) = current_mermaid {
             diagram["current_mermaid"] = serde_json::Value::String(mermaid.clone());
         }
-        // Remove scene_json — it's Excalidraw binary noise, not useful to Claude
+        // Remove Excalidraw noise and large chat history — not useful to AI agents
         if let Some(obj) = diagram.as_object_mut() {
             obj.remove("scene_json");
+            obj.remove("chat_messages");
         }
         println!("{}", serde_json::to_string_pretty(&diagram).unwrap_or_default());
         return;
@@ -449,6 +531,17 @@ async fn show(token: &str, id: &str, json: bool) {
     println!("{}", "─".repeat(56).dimmed());
 }
 
+fn strip_scene_json(v: &mut serde_json::Value) {
+    if let Some(obj) = v.as_object_mut() {
+        obj.remove("scene_json");
+        if let Some(children) = obj.get_mut("children") {
+            if let Some(arr) = children.as_array_mut() {
+                for child in arr { strip_scene_json(child); }
+            }
+        }
+    }
+}
+
 async fn tree_cmd(token: &str, id: &str, json: bool) {
     let client = reqwest::Client::new();
     let resp = match client
@@ -458,18 +551,31 @@ async fn tree_cmd(token: &str, id: &str, json: bool) {
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
 
     match resp.status().as_u16() {
-        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
-        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        401 => {
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired.", "✗".red()); }
+            std::process::exit(1);
+        }
+        404 => {
+            if json { println!("{}", serde_json::json!({"error": "not_found"})); }
+            else { eprintln!("{} Diagram not found.", "✗".red()); }
+            std::process::exit(1);
+        }
         _ => {}
     }
 
-    let data: serde_json::Value = resp.json().await.unwrap_or_default();
+    let mut data: serde_json::Value = resp.json().await.unwrap_or_default();
 
     if json {
+        if let Some(tree) = data.get_mut("tree") { strip_scene_json(tree); }
         println!("{}", serde_json::to_string_pretty(&data).unwrap_or_default());
         return;
     }
@@ -480,11 +586,15 @@ async fn tree_cmd(token: &str, id: &str, json: bool) {
 }
 
 fn print_tree(node: &serde_json::Value, prefix: &str, is_last: bool) {
+    print_tree_inner(node, prefix, is_last, true);
+}
+
+fn print_tree_inner(node: &serde_json::Value, prefix: &str, is_last: bool, is_root: bool) {
     let name    = node["name"].as_str().unwrap_or("Untitled");
     let id      = node["id"].as_str().unwrap_or("");
-    let node_id = node["node_id"].as_str().unwrap_or("");
+    let node_id = node["parent_node_id"].as_str().unwrap_or("");
 
-    let connector = if prefix.is_empty() { "" } else if is_last { "└── " } else { "├── " };
+    let connector = if is_root { "" } else if is_last { "└── " } else { "├── " };
     let label = if node_id.is_empty() {
         format!("{}  {}", name.bold(), id.dimmed())
     } else {
@@ -493,7 +603,7 @@ fn print_tree(node: &serde_json::Value, prefix: &str, is_last: bool) {
     println!("{}{}{}", prefix, connector, label);
 
     if let Some(children) = node["children"].as_array() {
-        let child_prefix = if prefix.is_empty() {
+        let child_prefix = if is_root {
             "".to_string()
         } else if is_last {
             format!("{}    ", prefix)
@@ -501,7 +611,7 @@ fn print_tree(node: &serde_json::Value, prefix: &str, is_last: bool) {
             format!("{}│   ", prefix)
         };
         for (i, child) in children.iter().enumerate() {
-            print_tree(child, &child_prefix, i == children.len() - 1);
+            print_tree_inner(child, &child_prefix, i == children.len() - 1, false);
         }
     }
 }
@@ -544,6 +654,14 @@ async fn generate(
         if let Some(i) = intent {
             b["intent"] = serde_json::Value::String(i.to_string());
         }
+        // Send the current diagram content so the server AI has full context.
+        // Mirrors what the web app does (it sends currentMermaid from its in-memory
+        // canvas). Without this the server falls back to scene_json reconstruction
+        // which returns "flowchart TB" for many diagrams, causing the AI to silently
+        // delete existing nodes on edit turns.
+        if let Some(cm) = fetch_current_mermaid(token, id).await {
+            b["currentMermaid"] = serde_json::Value::String(cm);
+        }
         b
     };
     // A chat session can be targeted on either path.
@@ -560,15 +678,27 @@ async fn generate(
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
 
     let status = resp.status().as_u16();
     let result: serde_json::Value = resp.json().await.unwrap_or_default();
 
     match status {
-        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
-        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        401 => {
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired.", "✗".red()); }
+            std::process::exit(1);
+        }
+        404 => {
+            if json { println!("{}", serde_json::json!({"error": "not_found"})); }
+            else { eprintln!("{} Diagram not found.", "✗".red()); }
+            std::process::exit(1);
+        }
         200 | 201 => {}
         429 => {
             // AI quota / rate limit (AiQuotaException) — surface the server's
@@ -596,6 +726,7 @@ async fn generate(
         }
     }
 
+    let input_mermaid = mermaid; // save Option<&str> param before it is shadowed below
     let mermaid = result["mermaid"].as_str().unwrap_or("").to_string();
     let drills  = result["drills"].as_array().cloned().unwrap_or_default();
 
@@ -670,7 +801,10 @@ async fn generate(
         // Seed the child with the drill's Mermaid when the generate response
         // included one, so a drilled-in diagram opens pre-populated instead of
         // empty. The field is ignored by backends that don't support it.
-        let mut child_body = serde_json::json!({ "node_id": node_id, "node_label": node_id });
+        let node_label = input_mermaid
+            .and_then(|m| extract_node_label(m, node_id))
+            .unwrap_or(node_id);
+        let mut child_body = serde_json::json!({ "node_id": node_id, "node_label": node_label });
         if let Some(seed) = drill["mermaid"].as_str() {
             if !seed.is_empty() {
                 child_body["seed_mermaid"] = serde_json::Value::String(seed.to_string());
@@ -738,6 +872,22 @@ async fn generate(
     if let Some(n) = notice {
         println!("\n{} {}", "⚠".yellow(), n);
     }
+}
+
+fn extract_node_label<'a>(mermaid: &'a str, node_id: &str) -> Option<&'a str> {
+    for line in mermaid.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix(node_id) {
+            let rest = rest.trim_start();
+            if rest.starts_with('[') || rest.starts_with("[(") {
+                let inner = rest.trim_start_matches('[').trim_start_matches('(');
+                let label = inner.split(|c| c == ']' || c == ')').next()?;
+                let label = label.trim().trim_matches('"');
+                if !label.is_empty() { return Some(label); }
+            }
+        }
+    }
+    None
 }
 
 fn direct_mermaid_body(
@@ -818,11 +968,23 @@ async fn share(token: &str, id: &str, rotate: bool, revoke: bool, json: bool) {
             .await
         {
             Ok(r) => r,
-            Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+            Err(_) => {
+                if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+                else { eprintln!("{} Could not reach server.", "✗".red()); }
+                std::process::exit(1);
+            }
         };
         match resp.status().as_u16() {
-            401 => { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); std::process::exit(1); }
-            404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+            401 => {
+                if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+                else { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); }
+                std::process::exit(1);
+            }
+            404 => {
+                if json { println!("{}", serde_json::json!({"error": "not_found"})); }
+                else { eprintln!("{} Diagram not found.", "✗".red()); }
+                std::process::exit(1);
+            }
             200 => {
                 if json {
                     println!("{}", serde_json::json!({"ok": true, "diagram_id": id, "shared": false}));
@@ -830,7 +992,11 @@ async fn share(token: &str, id: &str, rotate: bool, revoke: bool, json: bool) {
                     println!("{} Sharing disabled for {}", "✓".green().bold(), id.dimmed());
                 }
             }
-            s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+            s => {
+                if json { println!("{}", serde_json::json!({"error": "unexpected_status", "status": s})); }
+                else { eprintln!("{} Unexpected status {}.", "✗".red(), s); }
+                std::process::exit(1);
+            }
         }
         return;
     }
@@ -846,11 +1012,23 @@ async fn share(token: &str, id: &str, rotate: bool, revoke: bool, json: bool) {
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
     let had_link = match get_resp.status().as_u16() {
-        401 => { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); std::process::exit(1); }
-        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        401 => {
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); }
+            std::process::exit(1);
+        }
+        404 => {
+            if json { println!("{}", serde_json::json!({"error": "not_found"})); }
+            else { eprintln!("{} Diagram not found.", "✗".red()); }
+            std::process::exit(1);
+        }
         200 => {
             let body: serde_json::Value = get_resp.json().await.unwrap_or_default();
             match share_token(&body, "token") {
@@ -864,7 +1042,11 @@ async fn share(token: &str, id: &str, rotate: bool, revoke: bool, json: bool) {
                 None => false, // not shared yet — the POST below mints the first link
             }
         }
-        s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+        s => {
+            if json { println!("{}", serde_json::json!({"error": "unexpected_status", "status": s})); }
+            else { eprintln!("{} Unexpected status {}.", "✗".red(), s); }
+            std::process::exit(1);
+        }
     };
 
     let resp = match client
@@ -874,21 +1056,41 @@ async fn share(token: &str, id: &str, rotate: bool, revoke: bool, json: bool) {
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
 
     match resp.status().as_u16() {
-        401 => { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); std::process::exit(1); }
-        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        401 => {
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired. Run {} again.", "✗".red(), "vaxis login".yellow()); }
+            std::process::exit(1);
+        }
+        404 => {
+            if json { println!("{}", serde_json::json!({"error": "not_found"})); }
+            else { eprintln!("{} Diagram not found.", "✗".red()); }
+            std::process::exit(1);
+        }
         200 | 201 => {
             let body: serde_json::Value = resp.json().await.unwrap_or_default();
             let tok = match share_token(&body, "token") {
                 Some(t) => t,
-                None => { eprintln!("{} Server returned no share token.", "✗".red()); std::process::exit(1); }
+                None => {
+                    if json { println!("{}", serde_json::json!({"error": "no_share_token"})); }
+                    else { eprintln!("{} Server returned no share token.", "✗".red()); }
+                    std::process::exit(1);
+                }
             };
             print_share_links(id, &tok, share_token(&body, "edit_token").as_deref(), had_link, json);
         }
-        s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+        s => {
+            if json { println!("{}", serde_json::json!({"error": "unexpected_status", "status": s})); }
+            else { eprintln!("{} Unexpected status {}.", "✗".red(), s); }
+            std::process::exit(1);
+        }
     }
 }
 
@@ -914,6 +1116,7 @@ fn print_share_links(id: &str, token: &str, edit_token: Option<&str>, replaced: 
             "shared": true,
             "url": view_url,
             "token": token,
+            "rotated": replaced,
         });
         if let (Some(t), Some(u)) = (edit_token, edit_url.as_ref()) {
             out["edit_token"] = serde_json::Value::String(t.to_string());
@@ -939,6 +1142,13 @@ async fn ask(token: &str, id: &str, prompt: &str, session: Option<&str>, json: b
     if let Some(s) = session {
         body["chat_session_id"] = serde_json::Value::String(s.to_string());
     }
+    // Include the current diagram content so the server AI can answer about it.
+    // The web app sends currentMermaid from its in-memory canvas; the CLI fetches
+    // it first. Without this, the server falls back to scene_json reconstruction
+    // which returns "flowchart TB", making the AI say "there are no nodes".
+    if let Some(cm) = fetch_current_mermaid(token, id).await {
+        body["currentMermaid"] = serde_json::Value::String(cm);
+    }
     if !json { println!("{}", "Asking...".dimmed()); }
 
     let client = reqwest::Client::new();
@@ -950,15 +1160,27 @@ async fn ask(token: &str, id: &str, prompt: &str, session: Option<&str>, json: b
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
 
     let status = resp.status().as_u16();
     let result: serde_json::Value = resp.json().await.unwrap_or_default();
 
     match status {
-        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
-        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        401 => {
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired.", "✗".red()); }
+            std::process::exit(1);
+        }
+        404 => {
+            if json { println!("{}", serde_json::json!({"error": "not_found"})); }
+            else { eprintln!("{} Diagram not found.", "✗".red()); }
+            std::process::exit(1);
+        }
         200 | 201 => {}
         429 => {
             let msg = result["error"]["message"].as_str()
@@ -1015,14 +1237,30 @@ async fn sessions_list(token: &str, id: &str, json: bool) {
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
 
     match resp.status().as_u16() {
-        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
-        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        401 => {
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired.", "✗".red()); }
+            std::process::exit(1);
+        }
+        404 => {
+            if json { println!("{}", serde_json::json!({"error": "not_found"})); }
+            else { eprintln!("{} Diagram not found.", "✗".red()); }
+            std::process::exit(1);
+        }
         200 => {}
-        s => { eprintln!("{} Could not list sessions (HTTP {}).", "✗".red(), s); std::process::exit(1); }
+        s => {
+            if json { println!("{}", serde_json::json!({"error": "unexpected_status", "status": s})); }
+            else { eprintln!("{} Could not list sessions (HTTP {}).", "✗".red(), s); }
+            std::process::exit(1);
+        }
     }
 
     let data: serde_json::Value = resp.json().await.unwrap_or_default();
@@ -1073,14 +1311,30 @@ async fn sessions_create(token: &str, id: &str, title: Option<&str>, json: bool)
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
 
     match resp.status().as_u16() {
-        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
-        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        401 => {
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired.", "✗".red()); }
+            std::process::exit(1);
+        }
+        404 => {
+            if json { println!("{}", serde_json::json!({"error": "not_found"})); }
+            else { eprintln!("{} Diagram not found.", "✗".red()); }
+            std::process::exit(1);
+        }
         200 | 201 => {}
-        s => { eprintln!("{} Could not create session (HTTP {}).", "✗".red(), s); std::process::exit(1); }
+        s => {
+            if json { println!("{}", serde_json::json!({"error": "unexpected_status", "status": s})); }
+            else { eprintln!("{} Could not create session (HTTP {}).", "✗".red(), s); }
+            std::process::exit(1);
+        }
     }
 
     let data: serde_json::Value = resp.json().await.unwrap_or_default();
@@ -1109,12 +1363,24 @@ async fn sessions_rename(token: &str, id: &str, session_id: &str, title: &str, j
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
 
     match resp.status().as_u16() {
-        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
-        404 => { eprintln!("{} Diagram or session not found.", "✗".red()); std::process::exit(1); }
+        401 => {
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired.", "✗".red()); }
+            std::process::exit(1);
+        }
+        404 => {
+            if json { println!("{}", serde_json::json!({"error": "not_found"})); }
+            else { eprintln!("{} Diagram or session not found.", "✗".red()); }
+            std::process::exit(1);
+        }
         200 => {
             if json {
                 let data: serde_json::Value = resp.json().await.unwrap_or_default();
@@ -1123,7 +1389,11 @@ async fn sessions_rename(token: &str, id: &str, session_id: &str, title: &str, j
                 println!("{} Session renamed to {}", "✓".green().bold(), title.green());
             }
         }
-        s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+        s => {
+            if json { println!("{}", serde_json::json!({"error": "unexpected_status", "status": s})); }
+            else { eprintln!("{} Unexpected status {}.", "✗".red(), s); }
+            std::process::exit(1);
+        }
     }
 }
 
@@ -1136,12 +1406,24 @@ async fn undo(token: &str, id: &str, json: bool) {
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
 
     match resp.status().as_u16() {
-        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
-        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        401 => {
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired.", "✗".red()); }
+            std::process::exit(1);
+        }
+        404 => {
+            if json { println!("{}", serde_json::json!({"error": "not_found"})); }
+            else { eprintln!("{} Diagram not found.", "✗".red()); }
+            std::process::exit(1);
+        }
         200 => {
             if json {
                 println!("{}", serde_json::json!({"ok": true, "diagram_id": id}));
@@ -1149,7 +1431,11 @@ async fn undo(token: &str, id: &str, json: bool) {
                 println!("{} Last AI turn removed from {}", "✓".green().bold(), id.dimmed());
             }
         }
-        s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+        s => {
+            if json { println!("{}", serde_json::json!({"error": "unexpected_status", "status": s})); }
+            else { eprintln!("{} Unexpected status {}.", "✗".red(), s); }
+            std::process::exit(1);
+        }
     }
 }
 
@@ -1163,12 +1449,24 @@ async fn rename(token: &str, id: &str, name: &str, json: bool) {
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
 
     match resp.status().as_u16() {
-        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
-        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        401 => {
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired.", "✗".red()); }
+            std::process::exit(1);
+        }
+        404 => {
+            if json { println!("{}", serde_json::json!({"error": "not_found"})); }
+            else { eprintln!("{} Diagram not found.", "✗".red()); }
+            std::process::exit(1);
+        }
         200 => {
             if json {
                 println!("{}", serde_json::json!({"ok": true, "diagram_id": id, "name": name}));
@@ -1176,7 +1474,11 @@ async fn rename(token: &str, id: &str, name: &str, json: bool) {
                 println!("{} Renamed to {}", "✓".green().bold(), name.green());
             }
         }
-        s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+        s => {
+            if json { println!("{}", serde_json::json!({"error": "unexpected_status", "status": s})); }
+            else { eprintln!("{} Unexpected status {}.", "✗".red(), s); }
+            std::process::exit(1);
+        }
     }
 }
 
@@ -1204,12 +1506,24 @@ async fn delete(token: &str, id: &str, force: bool, json: bool) {
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
 
     match resp.status().as_u16() {
-        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
-        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        401 => {
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired.", "✗".red()); }
+            std::process::exit(1);
+        }
+        404 => {
+            if json { println!("{}", serde_json::json!({"error": "not_found"})); }
+            else { eprintln!("{} Diagram not found.", "✗".red()); }
+            std::process::exit(1);
+        }
         200 => {
             if json {
                 println!("{}", serde_json::json!({"ok": true, "diagram_id": id}));
@@ -1217,7 +1531,11 @@ async fn delete(token: &str, id: &str, force: bool, json: bool) {
                 println!("{} Deleted {}", "✓".green().bold(), id.dimmed());
             }
         }
-        s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+        s => {
+            if json { println!("{}", serde_json::json!({"error": "unexpected_status", "status": s})); }
+            else { eprintln!("{} Unexpected status {}.", "✗".red(), s); }
+            std::process::exit(1);
+        }
     }
 }
 
@@ -1226,8 +1544,15 @@ fn format_spec() -> serde_json::Value {
         .expect("embedded diagram format contract must be valid JSON")
 }
 
-fn format_cmd(_json: bool) {
-    println!("{}", serde_json::to_string_pretty(&format_spec()).unwrap_or_default());
+fn format_cmd(json: bool) {
+    let spec = format_spec();
+    if json {
+        println!("{}", serde_json::to_string_pretty(&spec).unwrap_or_default());
+    } else {
+        let version = spec["schema_version"].as_str().unwrap_or("?");
+        println!("{} Mermaid authoring contract v{}", "ℹ".cyan(), version);
+        println!("{}", serde_json::to_string_pretty(&spec).unwrap_or_default());
+    }
 }
 
 fn contract_drift(local: &serde_json::Value, remote: &serde_json::Value) -> Vec<String> {
@@ -1258,8 +1583,10 @@ fn contract_drift(local: &serde_json::Value, remote: &serde_json::Value) -> Vec<
             })
             .unwrap_or_default()
     };
-    let local_tokens = normalized_tokens(&local["authoring_contract"]["shapes"]["storage_keywords"]);
-    let remote_tokens = normalized_tokens(&remote["shapes"]["storage_keywords"]);
+    let mut local_tokens = normalized_tokens(&local["authoring_contract"]["shapes"]["storage_keywords"]);
+    let mut remote_tokens = normalized_tokens(&remote["shapes"]["storage_keywords"]);
+    local_tokens.sort_unstable();
+    remote_tokens.sort_unstable();
     if local_tokens != remote_tokens {
         drift.push("storage keyword list differs".to_string());
     }
@@ -1278,12 +1605,14 @@ async fn rules_check(token: &str, json: bool) {
     let response = match response {
         Ok(response) => response,
         Err(error) => {
-            eprintln!("{} Could not fetch server rules: {}", "✗".red(), error);
+            if json { println!("{}", serde_json::json!({"error": "network_error", "message": error.to_string()})); }
+            else { eprintln!("{} Could not fetch server rules: {}", "✗".red(), error); }
             std::process::exit(1);
         }
     };
     if !response.status().is_success() {
-        eprintln!("{} Server rules request failed (HTTP {}).", "✗".red(), response.status());
+        if json { println!("{}", serde_json::json!({"error": "request_failed", "status": response.status().as_u16()})); }
+        else { eprintln!("{} Server rules request failed (HTTP {}).", "✗".red(), response.status()); }
         std::process::exit(1);
     }
     let remote: serde_json::Value = response.json().await.unwrap_or_default();
@@ -1416,6 +1745,31 @@ mod format_tests {
 }
 
 
+fn resolve_import_content(mermaid: Option<String>, file: Option<std::path::PathBuf>, json: bool) -> String {
+    if let Some(m) = mermaid {
+        return m;
+    }
+    if let Some(path) = file {
+        return match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(e) => {
+                if json {
+                    println!("{}", serde_json::json!({"error": "file_read_error", "message": e.to_string()}));
+                } else {
+                    eprintln!("{} Could not read {}: {}", "✗".red(), path.display(), e);
+                }
+                std::process::exit(1);
+            }
+        };
+    }
+    if json {
+        println!("{}", serde_json::json!({"error": "invalid_arguments", "message": "provide --mermaid or --file"}));
+    } else {
+        eprintln!("{} Provide either --mermaid or --file", "✗".red());
+    }
+    std::process::exit(1);
+}
+
 async fn import_cmd(token: &str, id: &str, mermaid: &str, json: bool) {
     let client = reqwest::Client::new();
     let resp = match client
@@ -1426,12 +1780,24 @@ async fn import_cmd(token: &str, id: &str, mermaid: &str, json: bool) {
         .await
     {
         Ok(r) => r,
-        Err(_) => { eprintln!("{} Could not reach server.", "✗".red()); std::process::exit(1); }
+        Err(_) => {
+            if json { println!("{}", serde_json::json!({"error": "network_error"})); }
+            else { eprintln!("{} Could not reach server.", "✗".red()); }
+            std::process::exit(1);
+        }
     };
 
     match resp.status().as_u16() {
-        401 => { eprintln!("{} Session expired.", "✗".red()); std::process::exit(1); }
-        404 => { eprintln!("{} Diagram not found.", "✗".red()); std::process::exit(1); }
+        401 => {
+            if json { println!("{}", serde_json::json!({"error": "session_expired"})); }
+            else { eprintln!("{} Session expired.", "✗".red()); }
+            std::process::exit(1);
+        }
+        404 => {
+            if json { println!("{}", serde_json::json!({"error": "not_found"})); }
+            else { eprintln!("{} Diagram not found.", "✗".red()); }
+            std::process::exit(1);
+        }
         200 => {
             if json {
                 println!("{}", serde_json::json!({"ok": true, "diagram_id": id}));
@@ -1439,6 +1805,10 @@ async fn import_cmd(token: &str, id: &str, mermaid: &str, json: bool) {
                 println!("{} Mermaid imported to {}", "✓".green().bold(), id.dimmed());
             }
         }
-        s => { eprintln!("{} Unexpected status {}.", "✗".red(), s); std::process::exit(1); }
+        s => {
+            if json { println!("{}", serde_json::json!({"error": "unexpected_status", "status": s})); }
+            else { eprintln!("{} Unexpected status {}.", "✗".red(), s); }
+            std::process::exit(1);
+        }
     }
 }

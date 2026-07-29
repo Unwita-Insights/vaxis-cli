@@ -43,13 +43,6 @@ pub fn save(config: &Config) {
     fs::write(&path, content).expect("cannot write config file");
 }
 
-pub fn clear() {
-    let path = config_path();
-    if path.exists() {
-        fs::remove_file(path).expect("cannot remove config file");
-    }
-}
-
 /// The stored generation-mode preference, if the user has set one.
 pub fn generation_mode() -> Option<String> {
     load().generation_mode

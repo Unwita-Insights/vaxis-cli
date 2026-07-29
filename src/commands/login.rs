@@ -18,7 +18,11 @@ pub async fn run() {
 
     // Step 2: Open the real domain in the browser
     println!("{}", "Opening browser for login...".cyan());
-    open::that(&browser_url).expect("failed to open browser");
+    if let Err(e) = open::that(&browser_url) {
+        eprintln!("{} Could not open browser: {}", "✗".red(), e);
+        eprintln!("  Open this URL manually: {}", browser_url.cyan());
+        std::process::exit(1);
+    }
 
     // Step 3: Poll until login is complete
     println!("{}", "Waiting for you to complete login in the browser...".dimmed());

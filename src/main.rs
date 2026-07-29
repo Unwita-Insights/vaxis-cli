@@ -9,6 +9,17 @@ use cli::{Cli, Commands};
 
 #[tokio::main]
 async fn main() {
+    std::panic::set_hook(Box::new(|info| {
+        let msg = info.to_string();
+        if msg.contains("BrokenPipe")
+            || msg.contains("os error 32")
+            || msg.contains("os error 232")
+        {
+            std::process::exit(0);
+        }
+        eprintln!("{info}");
+    }));
+
     let cli = Cli::parse();
     let json = cli.json;
 

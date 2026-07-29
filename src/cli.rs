@@ -81,20 +81,23 @@ pub enum GenerationMode {
     Mermaid,
     /// Vaxis's server AI generates the diagram
     Prompt,
+    /// Clear the saved generation mode (you will be asked again on next generate)
+    Unset,
 }
 
 impl GenerationMode {
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> Option<&'static str> {
         match self {
-            GenerationMode::Mermaid => "mermaid",
-            GenerationMode::Prompt => "prompt",
+            GenerationMode::Mermaid => Some("mermaid"),
+            GenerationMode::Prompt => Some("prompt"),
+            GenerationMode::Unset => None,
         }
     }
 }
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Install optional Vaxis integrations
+    /// Install the Vaxis skill for your AI agent
     Install {
         /// Install the Vaxis discovery skill for supported AI agents
         #[arg(long)]
@@ -189,7 +192,7 @@ pub enum SkillsAction {
         name: String,
     },
 
-    /// Preview a bundled skill (currently the same raw content as get)
+    /// Preview a bundled skill (alias for get)
     Preview {
         /// Bundled skill name
         name: String,
@@ -287,23 +290,23 @@ pub enum DiagramsAction {
         session: Option<String>,
 
         /// Direct Mermaid direction policy; preserve is the backward-compatible default
-        #[arg(long, value_enum, requires = "mermaid")]
+        #[arg(long, value_enum, requires = "mermaid", conflicts_with = "prompt", hide = true)]
         direction_policy: Option<DirectDirectionPolicy>,
 
-        /// Force LR or TB on direct Mermaid
-        #[arg(long, value_enum, requires = "mermaid")]
+        /// Force lr or tb on direct Mermaid
+        #[arg(long, value_enum, requires = "mermaid", conflicts_with = "prompt", hide = true)]
         explicit_direction: Option<FlowDirection>,
 
         /// Mark direct Mermaid as a fresh generation eligible for opt-in auto direction
-        #[arg(long, requires = "mermaid")]
+        #[arg(long, requires = "mermaid", conflicts_with = "prompt", hide = true)]
         fresh_generation: bool,
 
         /// Canvas width for direction decisions (requires --viewport-height)
-        #[arg(long, requires_all = ["mermaid", "viewport_height"])]
+        #[arg(long, requires_all = ["mermaid", "viewport_height"], conflicts_with = "prompt", hide = true)]
         viewport_width: Option<u32>,
 
         /// Canvas height for direction decisions (requires --viewport-width)
-        #[arg(long, requires_all = ["mermaid", "viewport_width"])]
+        #[arg(long, requires_all = ["mermaid", "viewport_width"], conflicts_with = "prompt", hide = true)]
         viewport_height: Option<u32>,
     },
 
@@ -382,13 +385,15 @@ pub enum DiagramsAction {
         force: bool,
     },
 
-    /// Return Mermaid format reference — diagram types, syntax rules, limits
+    /// Mermaid authoring contract (JSON) — diagram types, syntax rules, limits
     Format,
 
     /// Compare the embedded authoring contract with the connected Vaxis server
+    #[command(hide = true)]
     RulesCheck,
 
     /// Evaluate recorded native/direct Mermaid outputs against the parity catalog
+    #[command(hide = true)]
     Evaluate {
         /// JSON file containing recorded outputs for one or more eval cases
         #[arg(long)]
@@ -404,9 +409,13 @@ pub enum DiagramsAction {
         /// Diagram ID
         id: String,
 
-        /// Raw Mermaid source to save
-        #[arg(long)]
-        mermaid: String,
+        /// Raw Mermaid source to save (conflicts with --file)
+        #[arg(long, conflicts_with = "file")]
+        mermaid: Option<String>,
+
+        /// Path to a .mmd file to import (conflicts with --mermaid)
+        #[arg(long, conflicts_with = "mermaid")]
+        file: Option<PathBuf>,
     },
 }
 
