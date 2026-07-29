@@ -33,5 +33,7 @@ async fn main() {
         Commands::Config { action }    => commands::config::run(action, json),
         Commands::Apps   { action }    => commands::apps::run(action, json).await,
         Commands::Diagrams { action }  => commands::diagrams::run(action, json).await,
+        Commands::Upgrade              => commands::upgrade::run(json).await,
+        Commands::Uninstall { force }  => commands::uninstall::run(force, json),
     }
 }

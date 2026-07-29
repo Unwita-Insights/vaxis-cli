@@ -195,6 +195,24 @@ Exception: **Whole-canvas transform** ("turn this into a hospital system") → t
 
 All commands support `--json` for machine-readable output. Always use `--json` when reading output to make decisions.
 
+### CLI maintenance
+
+```bash
+# Check for updates and upgrade in place (runs npm install -g @unwita-insights/vaxis@latest)
+vaxis upgrade
+vaxis upgrade --json
+# → {"current_version":"0.5.3","latest_version":"0.5.3","up_to_date":true}
+# → {"current_version":"0.5.2","latest_version":"0.5.3","updated":true}
+
+# Remove vaxis from this system (prompts for confirmation)
+vaxis uninstall
+vaxis uninstall --force          # skip confirmation
+vaxis uninstall --force --json   # → {"ok":true}
+```
+
+Both commands require npm in PATH. If npm is not found, a manual instruction is printed.
+These are user-facing maintenance commands; do not invoke them autonomously.
+
 ### Skills
 
 ```bash
@@ -855,7 +873,11 @@ Run each time a new commit is detected:
    b. vaxis diagrams tree <rootId> --json        → understand hierarchy
    c. vaxis diagrams show <rootId> --json        → read current Mermaid
    d. Read only the changed files + their direct imports
-   e. Compose minimal edit (add/remove/rename nodes only as needed)
+   e. Compose minimal edit (add/remove/rename nodes only as needed).
+      Before removing any stale node, confirm:
+      "Commit `<hash>` makes `<nodeName>` stale — it no longer appears in the changed
+       files. Remove it from the diagram?"
+      If user declines, keep the node but note it in the report.
    f. vaxis diagrams generate <rootId> --mermaid "..." --json
    g. Report: "Updated diagram for commit <hash>: added metricsService, renamed api → gatewayApi."
 
@@ -935,6 +957,11 @@ Use when: "Diagram this monorepo" / "Show all services and how they relate"
    - Config files: nx.json (Nx), turbo.json (Turborepo), lerna.json (Lerna)
 
 2. Enumerate all apps/services from the monorepo root or apps/ directory listing.
+   If service count ≥ 40, ask before proceeding:
+   "I found <N> services. How should I handle this?
+    (a) Group by domain first — show domain nodes with drill markers into each domain.
+    (b) Show only the top-level public-facing services and hide internal ones.
+    (c) Proceed with all — I'll restructure if the node limit is hit."
 
 3. For each service, read ONLY its manifest + entry point:
    - What it exposes: HTTP port, queue topic, gRPC service, exported package
@@ -1047,7 +1074,10 @@ The CLI lints Mermaid before sending. Common error fields: error, issues[].
    → Move ALL %% vaxis:drill lines to AFTER the last diagram node/edge definition.
 
    Unknown node ID in a drill marker (%% vaxis:drill <id>)
-   → The node ID must exist in the diagram. Either correct the ID or remove the marker.
+   → The node ID must exist in the diagram. Before removing the marker, warn:
+     "The drill marker for `<nodeId>` references a node that doesn't exist in the diagram.
+      Removing it will prevent that node from expanding into a child diagram.
+      Shall I (a) remove the marker, or (b) add the missing node and keep the drill?"
 
    Invalid arrow syntax
    → Use only: -->, --->, -.->., ==>, --text-->, for flowcharts.
@@ -1071,8 +1101,12 @@ Run this checklist BEFORE every generate call to catch violations proactively.
 Count all node definitions in the Mermaid (lines matching `<id>[...]`, `<id>(...)`, etc.):
   - 45–50 nodes → warn user: "This diagram is near the 50-node limit. Consider splitting
     some composite nodes into drill children instead of adding more."
-  - > 50 nodes → restructure FIRST; do not generate.
-    Move the overflow nodes into a new child diagram under a drill marker.
+  - > 50 nodes → do not generate yet. Ask the user which nodes to move:
+    "This diagram has <N> nodes, which is over the 50-node limit.
+     I need to move some composite nodes into child diagrams.
+     Which of these look like good candidates to drill into? [list composite/service nodes]
+     Or shall I pick the most connected nodes automatically?"
+    Once confirmed, move chosen nodes under %% vaxis:drill markers, then generate.
 
 ─── Edge limit (UC-58, 60-edge cap) ─────────────────────────────────────────
 Count all edge definitions (lines containing -->, -.->, ==>, etc.):
@@ -1118,8 +1152,14 @@ When a generate --prompt call times out (no response after ~30 s):
 2. Tell user: "The server timed out generating the diagram. The diagram may be in a
    partial state."
 3. Run: vaxis diagrams show <diagramId> --json → check current_mermaid.
-   - If current_mermaid changed (partial result saved) → offer to undo first:
-     vaxis diagrams undo <diagramId> --json
+   - If current_mermaid changed (partial result saved):
+     Ask: "The server saved a partial diagram (<N> nodes visible).
+      Shall I (a) undo and retry from the full Mermaid,
+              (b) keep the partial and continue adding the missing nodes, or
+              (c) regenerate from scratch?"
+     (a) → vaxis diagrams undo <diagramId> --json, then retry with full --mermaid.
+     (b) → vaxis diagrams show <diagramId> --json, compose remaining nodes, generate.
+     (c) → vaxis diagrams generate <diagramId> --mermaid "<full-mermaid>" --json.
    - If current_mermaid is unchanged → safe to retry directly.
 4. Prefer --mermaid path on retry (bypasses server AI, avoids re-triggering the timeout).
 

@@ -5,3 +5,5 @@ pub mod config;
 pub mod apps;
 pub mod diagrams;
 pub mod skills;
+pub mod upgrade;
+pub mod uninstall;
