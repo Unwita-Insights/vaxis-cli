@@ -684,10 +684,13 @@ flowchart TB
 ---
 
 ### UC-77 · Rate limiting (429 — too many requests)
-**Scenario:** User or AI is calling the generate endpoint too rapidly.
-**Trigger:** Generate command when server AI quota is exceeded.
-**Expected behavior:** CLI surfaces the server's rate-limit message. Human: `⚠ Rate limited: <message>`.
-**Edge cases:** `--mermaid` path bypasses server AI and is not rate-limited for the AI generation step.
+**Scenario:** User or AI is calling the generate endpoint too rapidly, or has exceeded their plan quota.
+**Trigger:** Generate or ask command when server returns HTTP 429 with an error_code.
+**Expected behavior:** CLI shows a specific message based on error_code:
+  - `AI_RATE_LIMITED` → `⚠ Rate limited: You're generating too fast — wait a minute and try again.`
+  - `AI_QUOTA_EXCEEDED` → `⚠ Rate limited: Usage limit reached — check your account quota on the Vaxis dashboard.`
+  - Unknown 429 / no error_code → `⚠ Rate limited: <server message or fallback>`
+**Edge cases:** `--mermaid` path bypasses server AI and is not subject to `AI_RATE_LIMITED` or `AI_QUOTA_EXCEEDED`.
 
 ---
 

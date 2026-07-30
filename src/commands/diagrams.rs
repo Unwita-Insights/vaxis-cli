@@ -701,11 +701,15 @@ async fn generate(
         }
         200 | 201 => {}
         429 => {
-            // AI quota / rate limit (AiQuotaException) — surface the server's
-            // friendly message instead of a generic "unexpected status".
-            let msg = result["error"]["message"].as_str()
-                .or_else(|| result["error"].as_str())
-                .unwrap_or("You're generating too fast — wait a minute and try again.");
+            let error_code = result["error_code"].as_str().unwrap_or("");
+            let msg = match error_code {
+                "AI_RATE_LIMITED" => "You're generating too fast — wait a minute and try again.".to_string(),
+                "AI_QUOTA_EXCEEDED" => "Usage limit reached — check your account quota on the Vaxis dashboard.".to_string(),
+                _ => result["error"]["message"].as_str()
+                        .or_else(|| result["error"].as_str())
+                        .unwrap_or("You're generating too fast — wait a minute and try again.")
+                        .to_string(),
+            };
             if json {
                 println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
             } else {
@@ -1183,9 +1187,15 @@ async fn ask(token: &str, id: &str, prompt: &str, session: Option<&str>, json: b
         }
         200 | 201 => {}
         429 => {
-            let msg = result["error"]["message"].as_str()
-                .or_else(|| result["error"].as_str())
-                .unwrap_or("You're generating too fast — wait a minute and try again.");
+            let error_code = result["error_code"].as_str().unwrap_or("");
+            let msg = match error_code {
+                "AI_RATE_LIMITED" => "You're generating too fast — wait a minute and try again.".to_string(),
+                "AI_QUOTA_EXCEEDED" => "Usage limit reached — check your account quota on the Vaxis dashboard.".to_string(),
+                _ => result["error"]["message"].as_str()
+                        .or_else(|| result["error"].as_str())
+                        .unwrap_or("You're generating too fast — wait a minute and try again.")
+                        .to_string(),
+            };
             if json {
                 println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
             } else {

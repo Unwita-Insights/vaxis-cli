@@ -1164,14 +1164,21 @@ When a generate --prompt call times out (no response after ~30 s):
 4. Prefer --mermaid path on retry (bypasses server AI, avoids re-triggering the timeout).
 
 ─── Rate limiting — 429 (UC-77) ─────────────────────────────────────────────
-When any CLI call returns HTTP 429 or an error mentioning rate limit:
+The generate and ask commands distinguish two 429 error types via error_code:
 
-1. Do NOT silently retry in a loop.
-2. Tell user: "Vaxis has temporarily rate-limited this request. Please wait ~30 seconds
-   before retrying."
-3. On retry: if the original call used --prompt, switch to --mermaid if possible
-   (the --mermaid path bypasses the server AI's generation quota).
-4. If rate-limiting persists: advise user to check their account quota on the Vaxis dashboard.
+AI_RATE_LIMITED — per-user short-term throttle:
+  CLI shows: "You're generating too fast — wait a minute and try again."
+  1. Do NOT retry immediately or in a loop.
+  2. Wait ~60 seconds, then retry the same command.
+  3. Prefer --mermaid on retry (bypasses server AI, not subject to this throttle).
+
+AI_QUOTA_EXCEEDED — monthly/plan usage limit:
+  CLI shows: "Usage limit reached — check your account quota on the Vaxis dashboard."
+  1. Tell the user to visit the Vaxis dashboard to review or upgrade their plan.
+  2. The --mermaid path is not subject to the AI generation quota.
+
+Unknown 429 / no error_code (compat shim or unrecognised code):
+  Treat as AI_RATE_LIMITED — wait ~60 s then retry.
 
 ─── Partial drill creation failure (UC-79) ──────────────────────────────────
 After generate --mermaid returns, inspect the drills[] array in the JSON response:
