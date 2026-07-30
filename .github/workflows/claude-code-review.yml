@@ -117,12 +117,12 @@ jobs:
             6. Be constructive and specific
 
           claude_args: |
-            --model glm-5.2
+            --model glm-4.7
             --allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"
         env:
           ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
-          ANTHROPIC_MODEL: glm-5.2
+          ANTHROPIC_MODEL: glm-4.7
 
       - name: Display Review Results
         if: always()
