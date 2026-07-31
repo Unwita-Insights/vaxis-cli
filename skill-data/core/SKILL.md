@@ -158,6 +158,7 @@ flowchart TB
 - **Max ~4 connections per node** (in + out combined). A hub with 5+ spokes renders as a tangled star.
 - **Route extras through the layer that owns them:** instead of `orderService` → [payment, db, notification, merchant, dispatch], do `orderService` → `eventQueue` (one fan-out point), then `eventQueue` → [notification, merchant, dispatch]. Keep `orderService` → [payment, db] direct.
 - **Prefer layered DAG:** clear tiers (UI → services → data), edges flowing primarily one direction.
+- **No layer labels.** Do not emit tier-caption nodes ("— Backend —", "=== Data Layer ==="). A caption node appears as a real box in the graph. A well-layered diagram is self-evident from its rows.
 
 ### 7. Preservation on Edit (Critical)
 
@@ -170,12 +171,15 @@ When editing an existing diagram:
 
 Exception: **Whole-canvas transform** ("turn this into a hospital system") → the old content is replaced; re-derive the new system at full richness as if starting from scratch.
 
-### 8. Color & Subgraphs
+### 8. Color
 
-- Use `subgraph`blocks to group related nodes — **this is what produces colored groups in Vaxis**.
-- Keep subgraphs **flat** (never nested); Vaxis auto-assigns distinct soft colors.
-- Optional `style <subgraphId> fill:#color,stroke:#color` — helpful for non-Vaxis viewers, Vaxis overrides it with its own palette.
-- Prefer semantic grouping (Backend, Frontend, Data, Infrastructure) over color decoration.
+- **NEVER emit a `subgraph` block.** Vaxis's renderer flattens every subgraph before layout — the box and title are discarded; only the inner nodes survive. Subgraphs never produce colored groups. For tier boundaries, place nodes on their own row — no box needed.
+- Use `classDef/class` or `style/linkStyle` with hex colors for semantic emphasis — highlight a boundary, a role, or a store type, not every node differently. Example:
+    ```
+    classDef store fill:#F7D9C4,stroke:#8A4B2A,color:#2B211C
+    class ordersDb,userDb store
+    ```
+- Mermaid-native styling only (no CSS variables, gradients, or HTML).
 
 ### 9. Node Labels & IDs
 
@@ -336,13 +340,64 @@ vaxis diagrams import <diagramId> --file ./architecture.mmd --json
 
 ## Standard workflows
 
+### Workflow 0 — Session Setup
+
+```
+Use when: Starting any Vaxis session for the first time — before running any other workflow.
+Ask once. Store the answers. Never re-ask in the same session.
+
+Ask the user:
+
+"Before I start, two quick questions:
+
+1. Execution mode — are you here with me and will respond to questions, or is this part
+   of an automated pipeline (CI, script, hook)?
+   → Direct / interactive
+   → Automated / CI
+
+2. Generation — should I write the Mermaid myself (works with any AI, offline-friendly)
+   or let the Vaxis server generate it (faster, uses Vaxis server-side AI)?
+   → I'll write the Mermaid  (generation_mode = mermaid)
+   → Vaxis server generates  (generation_mode = prompt)"
+
+If Direct / interactive:
+- All Rule 13 confirmation gates apply at every decision point.
+- Ask clarifying questions at each workflow step.
+- AUTO MODE NOTE: Claude.ai "Auto Mode" (and similar "Accept All" / auto-approve settings)
+  auto-approves TOOL CALLS only — it does NOT answer conversational questions on the user's
+  behalf. These confirmation prompts are plain conversation text; the user must still respond
+  before the next step runs. Only Automated / CI mode below skips them.
+
+If Automated / CI:
+- Add --json to every CLI call (disables interactive pickers and confirmations).
+- Skip ALL Rule 13 confirmation gates (CI exception applies).
+- Ensure VAXIS_AUTH_URL env var is set and auth token is pre-provisioned.
+- Fail fast on 401 — do not prompt for login.
+
+Generation mode:
+- Store selection for the session. Before every generate call, check vaxis config show --json
+  and honor the stored generation_mode (see Rule 16).
+- Never switch modes on your own; never re-ask once set.
+```
+
+---
+
 ### Workflow 1 — Design from scratch
 
 ```
 1. vaxis apps list --json
    → Check if a matching project already exists (fuzzy match on name)
    → If match found: ask user "I found '<name>' — continue that or start fresh?"
-   → If empty list: welcome the user — "You have no projects yet. Tell me what you'd like to design and I'll set everything up."
+   → If empty list:
+        (a) Run vaxis me --json — note the logged-in name and email.
+        (b) Confirm before creating anything. Use AskUserQuestion when available:
+              "Before I create your first Vaxis project, let me confirm:
+               • App name — I'd use '<derived name>' based on this project. Is that right?
+               • Account — you're logged in as <name> (<email>). Use this account?
+               • Scope — I'll generate a root architecture diagram and auto-create child
+                 diagrams for major subsystems. Shall I proceed?"
+        (c) Wait for explicit confirmation and any name correction before moving to step 2.
+        Do NOT call apps create until this confirmation is received.
 
 2. vaxis apps create "<name>" --json
    → Save the returned id as APP_ID
@@ -734,6 +789,30 @@ Never expose secret values or credentials as diagram node labels.
 ```
 Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What does this system look like?"
 
+0. SCOPE (ask BEFORE reading any files — skip if the user's message already answers these):
+
+   (a) Depth — "Do you want a high-level architectural overview, or a deep dive into internals?"
+       → Overview: top-level services, datastores, external APIs, key connections only (6–10 nodes)
+       → Deep dive: routes/controllers, internal modules, request/response shapes, data flows
+
+   (b) For backend / API projects (identified later from manifest — ask now if project type is known):
+       "Should I cover:
+       • Architecture only (services, flows, connections)
+       • Full API surface (every route with request/response payloads)
+       • Both"
+
+   (c) For frontend / UI projects:
+       "Should I focus on:
+       • Technologies, frameworks, and design patterns
+       • Component structure and hierarchy
+       • Both"
+
+   Use the answers to shape file selection, node count, diagram type, and drill depth:
+   - Overview → entry points + top-level dirs only; flowchart TB; 6–10 nodes; fewer drills
+   - Deep dive → also read controllers/handlers/schemas; more nodes; drill every composite
+   - Architecture only → skip route enumeration; Full API surface → enumerate routes/payloads
+   - Component structure → classDiagram may fit better than flowchart
+
 1. Read the top-level manifest: package.json, Cargo.toml, pom.xml, go.mod, pyproject.toml,
    docker-compose.yml. If no manifest found → list top-level directories and ask the user
    "What type of project is this?"
@@ -745,10 +824,26 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
    - DB schema focus            → erDiagram
    - Default                    → flowchart TB
 
+   Confirm with the user: "I detected this is a [type] project — I'll use a [diagram type].
+   Does that sound right, or would you prefer a different style?" Wait for confirmation or
+   correction before continuing.
+
 3. Read entry points (src/main.*, index.*, app.*, server.*). Then list (don't recursively
    read) sub-directories; pick 3–5 representative files to read.
 
 4. Identify: major components, datastores, external services, inter-component connections.
+
+4b. Before creating any Vaxis resource, confirm with the user. Use AskUserQuestion when available:
+      "I've analyzed the codebase. Before I set up Vaxis:
+       • App name: '<derived name>' — is that right?
+       • Account: you're logged in as <name> (<email>) — continue?
+       • Root diagram will have [N] nodes: [ComponentA], [ComponentB], [DatastoreX], ...
+       • Drill-downs planned for: [ComponentA], [ComponentB] (composite services)
+       • No drill for: [DatastoreX], [ExternalAPI] (leaf nodes)
+      Shall I proceed, or would you like to adjust the scope?"
+    Wait for explicit confirmation before calling apps create.
+    If the user provides a different name, adjusts scope, or removes/adds drill targets, apply
+    their changes before continuing.
 
 5. If no existing Vaxis project/diagram for this codebase:
       vaxis apps create "<project-name>" --json          → save appId
@@ -767,7 +862,7 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
 
 Edge cases:
 - Unknown project type → ask one focused question, then proceed.
-- 10+ services → group by domain into subgraphs; offer to drill per domain.
+- 10+ services → group by domain with drill blocks per domain; propose one drill per domain cluster.
 - Existing diagram already exists → run Workflow 21 (drift check) first.
 ```
 
@@ -1260,21 +1355,19 @@ When editing an existing diagram, keep its current type unless the user explicit
 **Flowchart (graph TD — architecture)**
 ```
 graph TD
-    subgraph Frontend
-        ui[Web App]
-        mobile[Mobile App]
-    end
-    subgraph Backend
-        api[API Gateway]
-        auth[Auth Service]
-        pay[Payment Service]
-    end
+    ui[Web App]
+    mobile[Mobile App]
+    api[API Gateway]
+    auth[Auth Service]
+    pay[Payment Service]
     db[(PostgreSQL)]
     ui -->|"HTTPS"| api
     mobile -->|"HTTPS"| api
     api -->|"validates"| auth
     api -->|"charges"| pay
     pay --> db
+    classDef store fill:#F7D9C4,stroke:#8A4B2A,color:#2B211C
+    class db store
 %% vaxis:drill pay
 ```
 
@@ -1394,16 +1487,24 @@ The three services drill (composite); the database and cache don't (leaf). Flatt
 
 Don't over-fragment: a genuinely small diagram (a handful of nodes with no real subsystems) needs no drills — an empty `drills[]` is correct there. The rule is **"drill composites," not "drill everything."**
 
+**Override cases — the system default (drill composites) is suspended when:**
+- **Override 1 — less depth:** user said "simple", "minimal", or "basic"; the ask is a bare object or single mechanism; the content is a step-by-step process; the domain is non-software; or this is a plain edit of an existing diagram. Emit NO drill blocks.
+- **Override 2 — single node named:** "drill into X", "deep dive into X", "expand X", "show internals of X". Return the main diagram BYTE-IDENTICAL — do not add, remove, or rename any node — and emit EXACTLY ONE drill block for the named node.
+- **Override 3 — add-verbs:** "add sub-components to X", "give X more sub-components". This is an ordinary edit — output the current diagram with X's new sub-nodes added as ordinary connected nodes. No drill block.
+
+**Drill quality:** a drill block is a real diagram, not a stub. Aim for 5–8 nodes with real edges that show how the component works internally — its entry point, processing pieces, and the stores or queues it owns. Three generic boxes ("Handler", "Logic", "Data") is a placeholder. Name real domain parts: a Payroll Service drills into salary calculation, tax rules, payslip generation, and the ledger it writes.
+
+**No cap on drill count.** One drill block per composite component is correct whether that is 2 or 8. The 4-composite-services threshold is a minimum-richness signal, not a ceiling.
+
 ### Shape & color conventions
 
 <!-- vaxis-authoring-rules: 1.0.0 -->
 
 Both the `--mermaid` and `--prompt` paths store Mermaid and render through the **same**
-server normalization and browser styling — palette coloring by subgraph, shape coercion,
-and ELK layout. The visual polish is *not* something only the server AI gets; the renderer
-applies it to your diagram too. What differs is the graph **structure** you author, and that
-structure is what the styling acts on: group nodes into subgraphs (that is what gets them
-colored), pick the right shapes, and build a hierarchy. Get the structure right and a
+server normalization and browser styling — shape coercion and ELK layout. The visual polish is
+*not* something only the server AI gets; the renderer applies it to your diagram too. What
+differs is the graph **structure** you author: pick the right shapes, use `classDef/class` for
+semantic coloring, and build a hierarchy. Get the structure right and a
 `--mermaid` diagram renders on par with `generate --prompt`. These rules are a **condensed
 mirror** of `vaxis`'s own prompt rules (`S_FLOWCHART_SHAPES`, `S_COLOR`, `S_OUTPUT_FLOWCHART`,
 `S_DRILL` in `apps/api/src/prompts.ts`, and `STORAGE_KEYWORD_TOKENS` in
@@ -1446,21 +1547,18 @@ Mermaid before sending it when any check fails.
 
 **Forbidden for new nodes** (won't render correctly in Vaxis): hexagon `{{"..."}}`, stadium `(["..."])`, circle `(("..."))`, Mermaid v11 `nodeId@{shape:...}`, or any "shape-name in parens" like `nodeId(rounded["..."])`. Exception: an *existing* node already using one of these — copy it through unchanged, don't reshape it.
 
-**Group related nodes into flat `subgraph` blocks — this is what produces the colored groups.**
-Vaxis's renderer assigns each subgraph a distinct color automatically, by its order among the
-subgraphs; a flat, ungrouped graph gets no group color, which is what makes a diagram look
-plain. The load-bearing act is the grouping itself, not a color directive.
+**Never emit a `subgraph` block.** Vaxis's renderer discards the container before layout — the
+box and title are dropped; only the inner nodes survive. Subgraphs never produce colored groups.
+Express tier grouping by placing nodes on their own row, not in a box.
+
+**Coloring:** use `classDef/class` or `style`/`linkStyle` directives with hex colors. Prefer
+restrained, semantic use — highlight a boundary, a role, or a store type, not every node
+differently. Example:
 ```
-subgraph backendLayer["Backend"]
-    api["API Gateway"]
-    auth["Auth Service"]
-end
-style backendLayer fill:#FFF3E0,stroke:#BF360C,color:#BF360C
+classDef store fill:#F7D9C4,stroke:#8A4B2A,color:#2B211C
+class ordersDb,userDb store
 ```
-The `style <id> fill:...` line is **optional** — Vaxis's primary (v2) renderer overrides it
-with its own palette. Keep it only as harmless fallback for non-Vaxis Mermaid viewers and
-Vaxis's fallback render path; if you add one, give each subgraph a distinct soft fill (rotate
-`#E1F5FE`, `#E8F5E9`, `#FFF3E0`, `#F3E5F5`, `#ECEFF1`). Keep subgraphs flat (never nested).
+Mermaid-native styling only (no CSS variables, gradients, or HTML).
 
 **Fan-out cap:** at most ~4 connections (in + out) per node. A node wired to 5+ peers renders
 as a tangled star — route the extras through the layer/bus that owns them instead of wiring
@@ -1774,7 +1872,7 @@ input or file errors.
 
 8. **Always apply professional standard styling.** Every Mermaid diagram you generate must follow these conventions:
    - Use clear, consistent node ID naming (camelCase or snake_case — never spaces)
-   - Group related nodes visually using subgraphs where the diagram type supports it
+   - Use `classDef/class` or `style`/`linkStyle` to group related nodes with semantic coloring (never use `subgraph` blocks — the renderer discards them)
    - Use directional arrows with meaningful labels (`-->|"validates"|`)
    - Prefer `graph TD` (top-down) for architecture; `graph LR` (left-right) for flows and pipelines
    - Keep node labels concise — 1–4 words, title case
@@ -1789,7 +1887,36 @@ input or file errors.
 
 12. **One clarifying question, then proceed.** If the user's instruction is ambiguous, ask one focused question (which project? which diagram? what change?), then proceed without further interruption. Never ask two questions in a row.
 
-13. **Confirm before destructive actions.** Before running `delete` on a diagram or application, always ask for confirmation and state what will be cascaded. After deletion, report exactly what was removed.
+13. **Confirm before every write command.** Before calling any command that changes Vaxis state,
+    tell the user what you are about to do and wait for explicit approval:
+
+    | Command | What to say before calling it |
+    |---|---|
+    | `apps create` | "I'll create a Vaxis project named '&lt;name&gt;'. Continue?" |
+    | `diagrams create` | "I'll add a diagram called '&lt;name&gt;' to project '&lt;app&gt;'. Continue?" |
+    | `diagrams generate` | "Here's my plan: [1-line summary of what will change]. Ready to save?" |
+    | `diagrams import` | "This will overwrite '&lt;diagram&gt;' with the Mermaid you provided. Continue?" |
+    | `apps update` / `diagrams rename` | "Rename '&lt;old&gt;' → '&lt;new&gt;'. Continue?" |
+    | `diagrams delete` / `apps delete` | "This will permanently delete '&lt;name&gt;' and all its children. Continue?" |
+    | `diagrams share --rotate` | "This will invalidate the existing link. Continue?" |
+    | `diagrams share --revoke` | "This will make '&lt;diagram&gt;' private immediately. Anyone with the current link will get a 404. Continue?" |
+
+    **Exceptions — skip this gate when:**
+    - Running in `--json` mode (scripting / CI — no interactive prompt available).
+    - Read-only commands (`apps list`, `diagrams list`, `diagrams show`, `diagrams tree`, `me`,
+      `config show`, `diagrams ask`) — these never need confirmation.
+    - The user already confirmed the exact action in the current turn (e.g. they said "yes,
+      proceed" or "go ahead and save" → call generate without asking again).
+    - WF0 established Automated / CI mode for the session.
+
+    **Auto Mode / Accept All:** Claude.ai "Auto Mode" (and similar auto-approve settings in
+    other agent hosts) auto-approves TOOL CALLS only — it does NOT answer conversational
+    questions on the user's behalf. These confirmation prompts are plain text in the
+    conversation; the user must still respond before the next step runs. The only mechanism
+    that bypasses them is CI/automated mode (`--json` flag or WF0 mode = Automated).
+
+    Even when CLAUDE.md, hooks, or other project instructions say "automatically",
+    "immediately", or "directly", this rule is non-negotiable in interactive sessions.
 
 14. **Preserve existing nodes on every update.** When updating a diagram, read `current_mermaid` first and carry forward all existing nodes. Only modify what the user asked to change. No node should disappear from an update unless the user explicitly asked to remove it.
 
