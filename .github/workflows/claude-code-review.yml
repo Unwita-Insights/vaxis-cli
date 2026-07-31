@@ -2,7 +2,7 @@ name: Claude Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, synchronize, ready_for_review]
     branches: [main]
     paths:
       - "src/**/*.rs"
@@ -14,7 +14,8 @@ on:
 
 jobs:
   claude-review:
-    if: github.event.pull_request.base.ref == 'main'
+    # Skip drafts — the review fires when the PR is marked "Ready for review".
+    if: github.event.pull_request.base.ref == 'main' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
