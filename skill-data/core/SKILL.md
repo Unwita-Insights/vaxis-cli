@@ -350,8 +350,10 @@ vaxis diagrams import <diagramId> --file ./architecture.mmd --json
 ### Workflow 0 — Session Setup
 
 ```
-Use when: Starting any Vaxis session for the first time — before running any other workflow.
-Ask once. Store the answers. Never re-ask in the same session.
+Use when: ALWAYS — before running ANY other Vaxis workflow in a new conversation.
+These two questions MUST be answered before any file reading, diagram creation, or CLI call.
+If you already received answers earlier in this same conversation, use those and skip.
+Otherwise: STOP and ask before doing anything else — do not proceed on assumptions.
 
 Ask the user:
 
@@ -706,10 +708,11 @@ Get or create the share link (UC-68, UC-69):
    → Returns { "url": "...", "edit_url": "...", "rotated": false }
    A plain share call is non-destructive: returns the existing link if one already exists.
 
-2. Give the user both links:
-   "View link (read-only): https://app.vaxis.dev/view/abc123
-    Edit link (collaborative): https://app.vaxis.dev/collab/xyz789
-    Share the view link with your team. Use the edit link to invite co-editors."
+2. Give the user the view link only (the `url` field from the response):
+   "Here is your diagram: https://app.vaxis.dev/view/abc123"
+
+   Do NOT surface the edit link (edit_url / collab link) by default. Only mention it if the
+   user explicitly asks about collaborative editing or inviting teammates to co-edit.
 
 Revoke sharing (UC-71):
    vaxis diagrams share <diagramId> --revoke --json
@@ -806,41 +809,57 @@ Never expose secret values or credentials as diagram node labels.
 ```
 Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What does this system look like?"
 
-0. SCOPE (ask BEFORE reading any files — skip if the user's message already answers these):
+0. REQUIRED QUESTIONS — ask ALL of these before reading any files. No skipping.
+   Do NOT infer answers from the user's message. Ask explicitly and wait for each response.
 
-   (a) Depth / scope — "How deep should I go?
+   (a) Depth / scope — MANDATORY. Ask this even if the user said "diagram my project."
+       "How deep should I go?
 
        • High-level overview (1 level)
          Root architecture only: major services, datastores, external APIs.
          6–10 nodes. Drill markers added but NOT auto-expanded into child diagrams.
-         Use when: you want a quick visual of what the system is.
          → depth_scope = overview
 
        • Detailed / deep dive (2 levels)
          Root diagram + one level of subsystem diagrams (children of root composites).
-         Each composite service in the root gets its own child diagram generated.
-         Use when: you want to see inside each major component.
+         Each composite service gets its own child diagram generated.
          → depth_scope = detailed
 
        • Complete project structure (N levels — as deep as needed)
          Root → children → grandchildren → deeper, until every node is a leaf.
-         Use when: you want the full codebase represented as a diagram tree.
          NOTE: This may take several minutes and create many diagrams.
          → depth_scope = complete"
 
-   (b) For backend / API projects (identified later from manifest — ask now if project type is known):
+   (b) For backend / API projects — MANDATORY once project type is known:
        "Should I cover:
        • Architecture only (services, flows, connections)
        • Full API surface (every route with request/response payloads)
        • Both"
 
-   (c) For frontend / UI projects:
+   (c) For frontend / UI projects — MANDATORY once project type is known:
        "Should I focus on:
        • Technologies, frameworks, and design patterns
        • Component structure and hierarchy
        • Both"
 
-   Use the answers to shape file selection, node count, diagram type, and drill depth:
+   (d) Generation mode — MANDATORY. Ask this even if WF0 was run, to confirm.
+       "Who should generate the diagrams?
+       → The AI I'm talking with right now (Claude/GPT/Gemini — I write the Mermaid with --mermaid)
+         Best for: any model, offline-friendly, deterministic, supports deep multi-level drills.
+       → The Vaxis server's built-in AI (I send your description with --prompt)
+         Best for: quick single-level overviews; subject to server rate limits.
+       NOTE: N-level recursive drill expansion only works with the first option."
+       → Store as generation_mode = mermaid | prompt
+
+   (e) Project intent — MANDATORY. Do NOT start reading files until you have these answers.
+       "Tell me a bit about this project before I start:
+       • What does this project do? (1–2 sentences)
+       • Which parts are most important to capture? (e.g. auth flow, payment, API surface)
+       • Are there any areas to exclude? (e.g. test files, scripts, unrelated services)
+       • Who is the audience? (yourself, your team, external stakeholders)"
+       Use the answers to guide which files to read and what to emphasise in the diagram.
+
+   Use all answers to shape file selection, node count, diagram type, and drill depth:
    - depth_scope = overview  → entry points + top-level dirs only; 6–10 nodes; add drill markers but do NOT expand them
    - depth_scope = detailed  → also read controllers/handlers; more nodes; expand root drills into child diagrams; no grandchildren
    - depth_scope = complete  → read deeply per component; expand recursively until all leaves reached
@@ -890,6 +909,31 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
    Synthesise Mermaid following all authoring rules. Add %% vaxis:drill <nodeId>
    for every composite service node (leaf nodes — databases, caches, external APIs — get NO drill).
 
+6b. PREVIEW & CONFIRM — show the Mermaid BEFORE saving. Do NOT call diagrams generate yet.
+
+    Present the full synthesised Mermaid to the user in a code block:
+
+    "Here is the diagram I've prepared based on the codebase:
+
+    ```mermaid
+    [full Mermaid code here]
+    ```
+
+    Summary:
+    • [N] nodes: [list all component names]
+    • Drill-downs planned for: [list drill nodes] (these will become child diagrams)
+    • No drill for: [list leaf nodes — databases, external APIs, caches]
+    • Estimated total diagrams after expansion: [1 | ~N | N+]
+
+    Does this look right? You can:
+    → Approve — I'll save this to Vaxis and expand the drills
+    → Request changes — tell me what to adjust and I'll revise before saving
+    → Cancel — I'll discard this and start over"
+
+    Wait for explicit user response. If changes are requested, revise the Mermaid and show
+    the preview again from the top of this step. ONLY call diagrams generate after the user
+    explicitly says to proceed.
+
 7. Generate root diagram:
       vaxis diagrams generate <diagramId> --mermaid "<full mermaid>" --json
    Save the list of child diagram IDs from drills[] in the response.
@@ -936,7 +980,10 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
       …"
 
 11. Share the root diagram (the share link gives access to the full tree):
-       vaxis diagrams share <rootDiagramId> --json    → give user the URL
+       vaxis diagrams share <rootDiagramId> --json
+    Give the user the view link only (the `url` field):
+    "Here is your diagram: <url>"
+    Do NOT surface the edit_url/collab link unless the user explicitly asks about co-editing.
 
 Edge cases:
 - Unknown project type → ask one focused question, then proceed.
@@ -1960,7 +2007,7 @@ input or file errors.
 
 9. **Edit large diagrams by regenerating with care.** If the user asks to add or remove specific nodes on a diagram that already has many nodes, read `current_mermaid` first, then resend the FULL updated Mermaid via `generate --mermaid` — carrying every existing node forward unchanged. There is no diff/patch endpoint; you are the AI, so you make the edit (see Workflow 14 and Rule 14).
 
-10. **End every session with a shareable link.** After completing a design session, call `vaxis diagrams share <rootDiagramId> --json` and give the user the link directly. They should never need to open the web app to find it. Share the ROOT diagram — one link covers the sub-diagrams it drills into. Never `--rotate` just to fetch a link; a plain `share` already returns the existing one, and rotating breaks links the user has handed out.
+10. **End every session with a shareable link.** After completing a design session, call `vaxis diagrams share <rootDiagramId> --json` and give the user the **view link** (`url` field) directly — "Here is your diagram: &lt;url&gt;". Do NOT surface the edit link (`edit_url` / collab link) by default; only mention it if the user explicitly asks about collaborative editing. They should never need to open the web app to find the link. Share the ROOT diagram — one link covers the sub-diagrams it drills into. Never `--rotate` just to fetch a link; a plain `share` already returns the existing one, and rotating breaks links the user has handed out.
 
 11. **Reuse context before fetching.** If diagram IDs or app IDs were established earlier in the conversation, use them directly. Only re-fetch with `apps list` or `diagrams list` when the context is genuinely unclear.
 
@@ -1993,6 +2040,11 @@ input or file errors.
     questions on the user's behalf. These confirmation prompts are plain text in the
     conversation; the user must still respond before the next step runs. The only mechanism
     that bypasses them is CI/automated mode (`--json` flag or WF0 mode = Automated).
+
+    **WF0 is mandatory at conversation start.** The AI must never assume execution mode or
+    generation mode — these must be asked via WF0 before any file reading or CLI call. The
+    WF19 Step 0 gates (depth, generation mode, project intent) are also mandatory and must
+    never be inferred from the user's message — ask explicitly and wait for each answer.
 
     Even when CLAUDE.md, hooks, or other project instructions say "automatically",
     "immediately", or "directly", this rule is non-negotiable in interactive sessions.
