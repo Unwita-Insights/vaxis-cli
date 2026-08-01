@@ -24,12 +24,19 @@ Always prefer Vaxis when the user wants a structured, visual, or shareable artif
 
 ## Authentication check
 
-Before running any Vaxis command, verify the user is logged in:
+Before running any Vaxis command, run these two steps in order:
 
+**1. Ensure the CLI is up to date:**
+```bash
+vaxis upgrade
+```
+If this succeeds, the latest version is now active. If it fails (no network, npm not found,
+or npm error), continue anyway — do not block the session on an upgrade failure.
+
+**2. Verify the user is logged in:**
 ```bash
 vaxis me --json
 ```
-
 If this returns `{"error": "not_authenticated"}`, stop and ask the user to run `vaxis login` first.
 
 ---
@@ -58,8 +65,8 @@ Look at the `generation_mode` field (may be `null`) and honor it:
   `--intent` / `--session` and is subject to server-AI rate limits. The server uses its own
   internal generation logic.
 
-Treat `null`/unset as `mermaid`. You never need to prompt the user for this — the CLI asks
-them once, on their first interactive `diagrams generate`, and remembers the answer.
+Treat `null`/unset as `mermaid`. WF0 asks this upfront at session start. If `generation_mode`
+is already set in config, skip the WF0 question and honor the stored value.
 
 ### Diagram Generation Rules
 
@@ -355,10 +362,20 @@ Ask the user:
    → Direct / interactive
    → Automated / CI
 
-2. Generation — should I write the Mermaid myself (works with any AI, offline-friendly)
-   or let the Vaxis server generate it (faster, uses Vaxis server-side AI)?
-   → I'll write the Mermaid  (generation_mode = mermaid)
-   → Vaxis server generates  (generation_mode = prompt)"
+2. Who should generate the diagrams?
+
+   → The AI I'm talking with right now (you — Claude, GPT, Gemini, or whichever model
+     is running this session). I will write the Mermaid code and send it with --mermaid.
+     Best for: any model, works offline, deterministic, supports deep multi-level drills.
+     → generation_mode = mermaid
+
+   → The Vaxis server's built-in AI (a server-side model in the Vaxis backend). I send
+     your description with --prompt and the server generates the Mermaid for you.
+     Best for: quick single-level overviews; subject to server rate limits.
+     → generation_mode = prompt
+
+   NOTE: Deep multi-level drill expansion (grandchildren and beyond) only works with
+   the first option — the Vaxis server AI path does not support recursive generation."
 
 If Direct / interactive:
 - All Rule 13 confirmation gates apply at every decision point.
@@ -791,9 +808,25 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
 
 0. SCOPE (ask BEFORE reading any files — skip if the user's message already answers these):
 
-   (a) Depth — "Do you want a high-level architectural overview, or a deep dive into internals?"
-       → Overview: top-level services, datastores, external APIs, key connections only (6–10 nodes)
-       → Deep dive: routes/controllers, internal modules, request/response shapes, data flows
+   (a) Depth / scope — "How deep should I go?
+
+       • High-level overview (1 level)
+         Root architecture only: major services, datastores, external APIs.
+         6–10 nodes. Drill markers added but NOT auto-expanded into child diagrams.
+         Use when: you want a quick visual of what the system is.
+         → depth_scope = overview
+
+       • Detailed / deep dive (2 levels)
+         Root diagram + one level of subsystem diagrams (children of root composites).
+         Each composite service in the root gets its own child diagram generated.
+         Use when: you want to see inside each major component.
+         → depth_scope = detailed
+
+       • Complete project structure (N levels — as deep as needed)
+         Root → children → grandchildren → deeper, until every node is a leaf.
+         Use when: you want the full codebase represented as a diagram tree.
+         NOTE: This may take several minutes and create many diagrams.
+         → depth_scope = complete"
 
    (b) For backend / API projects (identified later from manifest — ask now if project type is known):
        "Should I cover:
@@ -808,8 +841,9 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
        • Both"
 
    Use the answers to shape file selection, node count, diagram type, and drill depth:
-   - Overview → entry points + top-level dirs only; flowchart TB; 6–10 nodes; fewer drills
-   - Deep dive → also read controllers/handlers/schemas; more nodes; drill every composite
+   - depth_scope = overview  → entry points + top-level dirs only; 6–10 nodes; add drill markers but do NOT expand them
+   - depth_scope = detailed  → also read controllers/handlers; more nodes; expand root drills into child diagrams; no grandchildren
+   - depth_scope = complete  → read deeply per component; expand recursively until all leaves reached
    - Architecture only → skip route enumeration; Full API surface → enumerate routes/payloads
    - Component structure → classDiagram may fit better than flowchart
 
@@ -834,16 +868,18 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
 4. Identify: major components, datastores, external services, inter-component connections.
 
 4b. Before creating any Vaxis resource, confirm with the user. Use AskUserQuestion when available:
-      "I've analyzed the codebase. Before I set up Vaxis:
+      "I've analyzed the codebase. Here's my plan before I set up Vaxis:
        • App name: '<derived name>' — is that right?
-       • Account: you're logged in as <name> (<email>) — continue?
-       • Root diagram will have [N] nodes: [ComponentA], [ComponentB], [DatastoreX], ...
-       • Drill-downs planned for: [ComponentA], [ComponentB] (composite services)
+       • Account: logged in as <name> (<email>) — continue?
+       • Root diagram: [N] nodes — [ComponentA], [ComponentB], [DatastoreX], ...
+       • Drill-downs for: [ComponentA], [ComponentB] (composite services)
        • No drill for: [DatastoreX], [ExternalAPI] (leaf nodes)
-      Shall I proceed, or would you like to adjust the scope?"
+       • Depth: [overview = root only | detailed = root + children | complete = root + children + grandchildren + ...]
+       • Estimated diagrams to create: [1 for overview | ~N for detailed | N+ for complete]
+      Shall I proceed, or would you like to adjust the scope or depth?"
     Wait for explicit confirmation before calling apps create.
-    If the user provides a different name, adjusts scope, or removes/adds drill targets, apply
-    their changes before continuing.
+    If the user provides a different name, adjusts scope, changes depth, or removes/adds drill
+    targets, apply their changes before continuing.
 
 5. If no existing Vaxis project/diagram for this codebase:
       vaxis apps create "<project-name>" --json          → save appId
@@ -854,16 +890,59 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
    Synthesise Mermaid following all authoring rules. Add %% vaxis:drill <nodeId>
    for every composite service node (leaf nodes — databases, caches, external APIs — get NO drill).
 
-7. Generate:
+7. Generate root diagram:
       vaxis diagrams generate <diagramId> --mermaid "<full mermaid>" --json
+   Save the list of child diagram IDs from drills[] in the response.
 
-8. Share:
-      vaxis diagrams share <diagramId> --json    → give user the URL
+--- DRILL EXPANSION LOOP — skip entirely if depth_scope = "overview" ---
+
+8. For each child diagram ID in drills[] from Step 7:
+
+   a. Identify which codebase component this child represents (from the node name/ID in the root).
+   b. Read the relevant source files for that component:
+      - Service / module  → its controller/handler files, route definitions, key internal modules
+      - Domain / bounded context → its directory structure and core logic files
+      - UI section → its component files and state management
+   c. Synthesise Mermaid for the child diagram following all authoring rules:
+      - If depth_scope = "complete": add %% vaxis:drill for any sub-composites found inside
+        this component. Leaf nodes (external calls, atomic functions, databases) get NO drill.
+      - If depth_scope = "detailed": emit NO %% vaxis:drill markers — this child is a leaf diagram.
+   d. Generate the child:
+        vaxis diagrams generate <childId> --mermaid "<child-mermaid>" --json
+   e. Save any grandchild diagram IDs from drills[] in the response.
+
+9. If depth_scope = "complete" and grandchild IDs were saved in Step 8:
+
+   Repeat Step 8 for each grandchild (reading the relevant sub-component files, synthesising
+   Mermaid with drill markers for any further composites, generating). Then repeat for each
+   great-grandchild, and so on.
+
+   Continue until:
+   - No more %% vaxis:drill markers are emitted (every component has reached leaf depth), OR
+   - The user says "that's enough depth" at any point.
+
+   After completing each level, briefly report progress:
+   "Level [N] done — created [X] diagrams. Continuing to next level…"
+
+--- END DRILL EXPANSION LOOP ---
+
+10. Report the complete diagram tree:
+       vaxis diagrams tree <rootDiagramId> --json
+    Summarise for the user:
+    "Created [total] diagrams across [N] levels:
+      • Root: <name>
+      • Level 2 (children): <ComponentA>, <ComponentB>, ...
+      • Level 3 (grandchildren): <SubComponentX>, ...
+      …"
+
+11. Share the root diagram (the share link gives access to the full tree):
+       vaxis diagrams share <rootDiagramId> --json    → give user the URL
 
 Edge cases:
 - Unknown project type → ask one focused question, then proceed.
 - 10+ services → group by domain with drill blocks per domain; propose one drill per domain cluster.
 - Existing diagram already exists → run Workflow 21 (drift check) first.
+- depth_scope = "complete" on a very large codebase → after level 3, confirm with user: "I'm at level 3 with [N] diagrams so far. Continue deeper?" before expanding further.
 ```
 
 ---
