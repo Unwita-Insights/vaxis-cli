@@ -109,6 +109,10 @@ pub async fn run(action: DiagramsAction, json: bool) {
             evaluate_cmd(captures, output.as_deref());
             return;
         }
+        DiagramsAction::Plan { file } => {
+            plan_cmd(file, json);
+            return;
+        }
         _ => {}
     }
 
@@ -182,6 +186,7 @@ pub async fn run(action: DiagramsAction, json: bool) {
             let resolved = resolve_diagram_id(&token, id, app_id, "Select diagram to delete:", json).await;
             delete(&token, &resolved, force, json).await;
         }
+        DiagramsAction::Plan { .. }            => {}  // handled before auth gate
         DiagramsAction::Format                 => format_cmd(json),
         DiagramsAction::RulesCheck             => rules_check(&token, json).await,
         DiagramsAction::Evaluate { captures, output } => evaluate_cmd(&captures, output.as_deref()),
@@ -1109,23 +1114,18 @@ fn share_token(body: &serde_json::Value, field: &str) -> Option<String> {
 
 // The backend returns tokens only; the CLI builds the URLs, matching the web
 // share dialog: /view/<token> is read-only, /collab/<edit_token> can edit.
-fn print_share_links(id: &str, token: &str, edit_token: Option<&str>, replaced: bool, json: bool) {
+fn print_share_links(id: &str, token: &str, _edit_token: Option<&str>, replaced: bool, json: bool) {
     let base = crate::config::base_url();
     let view_url = format!("{}/view/{}", base, token);
-    let edit_url = edit_token.map(|t| format!("{}/collab/{}", base, t));
 
     if json {
-        let mut out = serde_json::json!({
+        let out = serde_json::json!({
             "diagram_id": id,
             "shared": true,
             "url": view_url,
             "token": token,
             "rotated": replaced,
         });
-        if let (Some(t), Some(u)) = (edit_token, edit_url.as_ref()) {
-            out["edit_token"] = serde_json::Value::String(t.to_string());
-            out["edit_url"]   = serde_json::Value::String(u.clone());
-        }
         println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
         return;
     }
@@ -1133,10 +1133,7 @@ fn print_share_links(id: &str, token: &str, edit_token: Option<&str>, replaced: 
     if replaced {
         println!("{} New link minted — the previous one no longer works.", "⚠".yellow());
     }
-    println!("{} View link: {}", "✓".green().bold(), view_url.cyan());
-    if let Some(u) = edit_url {
-        println!("{} Edit link: {}", "✓".green().bold(), u.cyan());
-    }
+    println!("{} {}", "✓".green().bold(), view_url.cyan());
 }
 
 async fn ask(token: &str, id: &str, prompt: &str, session: Option<&str>, json: bool) {
@@ -1552,6 +1549,229 @@ async fn delete(token: &str, id: &str, force: bool, json: bool) {
 fn format_spec() -> serde_json::Value {
     serde_json::from_str(include_str!("../diagram_format.json"))
         .expect("embedded diagram format contract must be valid JSON")
+}
+
+fn plan_cmd(file: &std::path::PathBuf, json: bool) {
+    use std::collections::{HashMap, HashSet};
+
+    let content = match std::fs::read_to_string(file) {
+        Ok(c) => c,
+        Err(e) => {
+            if json {
+                println!("{}", serde_json::json!({"error": "ir_not_found", "message": e.to_string()}));
+            } else {
+                eprintln!("{} Could not read IR file: {}", "✗".red(), file.display());
+            }
+            std::process::exit(1);
+        }
+    };
+
+    let ir: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => {
+            if json {
+                println!("{}", serde_json::json!({"error": "ir_invalid"}));
+            } else {
+                eprintln!("{} Invalid JSON in IR file: {}", "✗".red(), file.display());
+            }
+            std::process::exit(1);
+        }
+    };
+
+    let diagram_name = ir["diagram"]["name"].as_str().unwrap_or("Untitled");
+    let diagram_type = ir["diagram"]["type"].as_str().unwrap_or("flowchart");
+    let direction    = ir["diagram"]["direction"].as_str().unwrap_or("TB");
+    let purpose      = ir["diagram"]["purpose"].as_str().unwrap_or("");
+    let audience     = ir["diagram"]["audience"].as_str().unwrap_or("");
+    let project_name = ir["project"]["name"].as_str().unwrap_or("");
+    let project_desc = ir["project"]["description"].as_str().unwrap_or("");
+    let depth_scope  = ir["project"]["depth_scope"].as_str().unwrap_or("mid");
+
+    let empty: Vec<serde_json::Value> = vec![];
+    let nodes  = ir["nodes"].as_array().unwrap_or(&empty);
+    let edges  = ir["edges"].as_array().unwrap_or(&empty);
+    let drills = ir["drills"].as_array().unwrap_or(&empty);
+
+    if json {
+        let components: Vec<serde_json::Value> = nodes.iter().map(|n| serde_json::json!({
+            "role":        n["role"].as_str().unwrap_or("other"),
+            "label":       n["label"].as_str().unwrap_or(""),
+            "description": n["description"].as_str().unwrap_or(""),
+            "drill":       n["drill"].as_bool().unwrap_or(false),
+        })).collect();
+        let connections: Vec<serde_json::Value> = edges.iter().map(|e| serde_json::json!({
+            "from":  e["source"].as_str().unwrap_or(""),
+            "to":    e["target"].as_str().unwrap_or(""),
+            "label": e["label"].as_str().unwrap_or(""),
+        })).collect();
+        let child_diagrams: Vec<serde_json::Value> = drills.iter().map(|d| serde_json::json!({
+            "parent_node":     d["nodeId"].as_str().unwrap_or(""),
+            "name":            d["diagram_name"].as_str().unwrap_or(""),
+            "estimated_nodes": d["estimated_nodes"].as_u64().unwrap_or(0),
+        })).collect();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "diagram_name":   diagram_name,
+            "project":        project_name,
+            "depth":          depth_scope,
+            "node_count":     nodes.len(),
+            "drill_count":    drills.len(),
+            "components":     components,
+            "connections":    connections,
+            "child_diagrams": child_diagrams,
+        })).unwrap_or_default());
+        return;
+    }
+
+    // Human output
+    let direction_upper = direction.to_ascii_uppercase();
+    let type_label = match (diagram_type, direction_upper.as_str()) {
+        ("flowchart", "TB") | ("flowchart", "TD") => "Flowchart (top-to-bottom)",
+        ("flowchart", "LR")                        => "Flowchart (left-to-right)",
+        ("classDiagram", _)                        => "Class diagram",
+        ("erDiagram", _)                            => "ER diagram",
+        (t, _)                                     => t,
+    };
+    let depth_label = match depth_scope {
+        "high" => "High-level",
+        "mid"  => "Mid-level",
+        "deep" => "Deep-level",
+        s      => s,
+    };
+
+    // ID → display label map (for resolving edge source/target)
+    let id_to_label: HashMap<&str, &str> = nodes.iter()
+        .filter_map(|n| Some((n["id"].as_str()?, n["label"].as_str()?)))
+        .collect();
+
+    // Detect bidirectional edge pairs (by node ID)
+    let bidir_pairs: HashSet<(String, String)> = edges.iter()
+        .filter(|e| {
+            let s = e["source"].as_str().unwrap_or("");
+            let t = e["target"].as_str().unwrap_or("");
+            edges.iter().any(|e2| {
+                e2["source"].as_str().unwrap_or("") == t &&
+                e2["target"].as_str().unwrap_or("") == s
+            })
+        })
+        .map(|e| {
+            let s = e["source"].as_str().unwrap_or("").to_string();
+            let t = e["target"].as_str().unwrap_or("").to_string();
+            if s < t { (s, t) } else { (t, s) }
+        })
+        .collect();
+
+    // ── Header ──────────────────────────────────────────────────────────────
+    println!();
+    println!("  {}", format!("Diagram Plan: {}", diagram_name).bold());
+    if !project_name.is_empty() {
+        if project_desc.is_empty() {
+            println!("  Project: {}", project_name);
+        } else {
+            println!("  Project: {} — {}", project_name, project_desc);
+        }
+    }
+    println!("  Type: {} | Depth: {}", type_label, depth_label);
+    if !purpose.is_empty()  { println!("  Purpose:  {}", purpose); }
+    if !audience.is_empty() { println!("  Audience: {}", audience); }
+
+    // ── Components ──────────────────────────────────────────────────────────
+    if !nodes.is_empty() {
+        let role_order = ["gateway", "service", "storage", "external", "other"];
+        let role_name  = |r: &str| match r {
+            "gateway"  => "Gateway",
+            "service"  => "Service",
+            "storage"  => "Storage",
+            "external" => "External",
+            _          => "Other",
+        };
+        let role_idx = |r: &str| role_order.iter().position(|&o| o == r).unwrap_or(4);
+        let max_lbl  = nodes.iter()
+            .map(|n| n["label"].as_str().unwrap_or("").len())
+            .max()
+            .unwrap_or(10);
+
+        let mut sorted: Vec<&serde_json::Value> = nodes.iter().collect();
+        sorted.sort_by_key(|n| role_idx(n["role"].as_str().unwrap_or("other")));
+
+        println!();
+        println!("  Components ({}):", nodes.len());
+        for n in &sorted {
+            let role     = n["role"].as_str().unwrap_or("other");
+            let label    = n["label"].as_str().unwrap_or("");
+            let desc     = n["description"].as_str().unwrap_or("");
+            let is_drill = n["drill"].as_bool().unwrap_or(false);
+
+            // Pad first (on plain string), then apply color — avoids ANSI-width mis-alignment
+            let role_tag    = format!("{:<12}", format!("[{}]", role_name(role)));
+            let padded_lbl  = format!("{:<width$}", label, width = max_lbl);
+            let drill_mark  = if is_drill { " ⬇" } else { "" };
+            println!("  {}{}{}  {}", role_tag.dimmed(), padded_lbl.bold(), drill_mark, desc);
+        }
+    }
+
+    // ── Connections ─────────────────────────────────────────────────────────
+    if !edges.is_empty() {
+        let max_from = edges.iter()
+            .map(|e| id_to_label.get(e["source"].as_str().unwrap_or("")).copied().unwrap_or("").len())
+            .max()
+            .unwrap_or(10);
+        let max_to = edges.iter()
+            .map(|e| id_to_label.get(e["target"].as_str().unwrap_or("")).copied().unwrap_or("").len())
+            .max()
+            .unwrap_or(10);
+
+        println!();
+        println!("  Connections ({}):", edges.len());
+        let mut seen_bidir: HashSet<(String, String)> = HashSet::new();
+        for e in edges {
+            let src      = e["source"].as_str().unwrap_or("");
+            let tgt      = e["target"].as_str().unwrap_or("");
+            let lbl      = e["label"].as_str().unwrap_or("");
+            let desc     = e["description"].as_str().unwrap_or("");
+            let src_lbl  = id_to_label.get(src).copied().unwrap_or(src);
+            let tgt_lbl  = id_to_label.get(tgt).copied().unwrap_or(tgt);
+            let detail   = match (!lbl.is_empty(), !desc.is_empty()) {
+                (true,  true)  => format!("{} — {}", lbl, desc),
+                (true,  false) => lbl.to_string(),
+                (false, true)  => desc.to_string(),
+                (false, false) => String::new(),
+            };
+            let pair = if src < tgt {
+                (src.to_string(), tgt.to_string())
+            } else {
+                (tgt.to_string(), src.to_string())
+            };
+            if bidir_pairs.contains(&pair) {
+                if seen_bidir.contains(&pair) { continue; }
+                seen_bidir.insert(pair);
+                println!("  {:<fw$} ↔ {:<tw$}  {}", src_lbl, tgt_lbl, detail,
+                    fw = max_from, tw = max_to);
+            } else {
+                println!("  {:<fw$} → {:<tw$}  {}", src_lbl, tgt_lbl, detail,
+                    fw = max_from, tw = max_to);
+            }
+        }
+    }
+
+    // ── Child Diagrams ──────────────────────────────────────────────────────
+    if !drills.is_empty() {
+        println!();
+        println!("  Child Diagrams ({}):", drills.len());
+        for d in drills {
+            let name = d["diagram_name"].as_str().unwrap_or("");
+            let ctx  = d["context"].as_str().unwrap_or("");
+            let est  = d["estimated_nodes"].as_u64()
+                .map(|n| format!(" (est. {} nodes)", n))
+                .unwrap_or_default();
+            if ctx.is_empty() {
+                println!("  ⬇  {}{}", name.bold(), est);
+            } else {
+                println!("  ⬇  {}{} — {}", name.bold(), est, ctx);
+            }
+        }
+    }
+
+    println!();
 }
 
 fn format_cmd(json: bool) {

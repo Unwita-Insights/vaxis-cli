@@ -351,52 +351,60 @@ vaxis diagrams import <diagramId> --file ./architecture.mmd --json
 
 ```
 Use when: ALWAYS — before running ANY other Vaxis workflow in a new conversation.
-These two questions MUST be answered before any file reading, diagram creation, or CLI call.
-If you already received answers earlier in this same conversation, use those and skip.
-Otherwise: STOP and ask before doing anything else — do not proceed on assumptions.
+This question MUST be answered before any file reading, diagram creation, or CLI call.
+Skip ONLY if WF0 was explicitly completed earlier in this conversation and the user gave
+a direct response to the question below. Do NOT infer the answer from the user's task
+description or assume from context. When in doubt, ask — do not proceed on assumptions.
 
 Ask the user:
 
-"Before I start, two quick questions:
+"Before I start, one quick question — how would you like to work?
 
-1. Execution mode — are you here with me and will respond to questions, or is this part
-   of an automated pipeline (CI, script, hook)?
-   → Direct / interactive
-   → Automated / CI
+→ Interactive — I'll ask a short set of questions at the start of each task and wait for
+  your answers before proceeding. I'll confirm the diagram plan before executing.
+  Best for: first-time runs, complex projects, when you want full control.
 
-2. Who should generate the diagrams?
+→ Hands-free — I'll use sensible defaults and proceed automatically. I'll show you the
+  diagram plan before executing and only stop if I hit a genuine conflict I can't resolve
+  (e.g. an existing diagram found with ambiguous intent, or multiple projects matching the
+  same name). Best for: Auto Mode, Accept Edits, quick iterations on familiar projects.
 
-   → The AI I'm talking with right now (you — Claude, GPT, Gemini, or whichever model
-     is running this session). I will write the Mermaid code and send it with --mermaid.
-     Best for: any model, works offline, deterministic, supports deep multi-level drills.
-     → generation_mode = mermaid
+→ Automated / CI — No questions at any step. I use defaults and --json on all calls.
+  Requires VAXIS_AUTH_URL env var and a pre-provisioned auth token."
 
-   → The Vaxis server's built-in AI (a server-side model in the Vaxis backend). I send
-     your description with --prompt and the server generates the Mermaid for you.
-     Best for: quick single-level overviews; subject to server rate limits.
-     → generation_mode = prompt
+If Interactive:
+- PREFLIGHT runs at the start of WF19 (4–5 questions, depending on stored config).
+- All Rule 13 confirmation gates apply.
+- Diagram type is confirmed after manifest read (WF19 Step 2).
 
-   NOTE: Deep multi-level drill expansion (grandchildren and beyond) only works with
-   the first option — the Vaxis server AI path does not support recursive generation."
-
-If Direct / interactive:
-- All Rule 13 confirmation gates apply at every decision point.
-- Ask clarifying questions at each workflow step.
-- AUTO MODE NOTE: Claude.ai "Auto Mode" (and similar "Accept All" / auto-approve settings)
-  auto-approves TOOL CALLS only — it does NOT answer conversational questions on the user's
-  behalf. These confirmation prompts are plain conversation text; the user must still respond
-  before the next step runs. Only Automated / CI mode below skips them.
+If Hands-free:
+- PREFLIGHT is skipped entirely. Defaults apply:
+    depth_scope     = "mid"
+    generation_mode = from `vaxis config show --json`; if unset → "mermaid"
+    diagram_name    = derived from manifest (<PackageName> Architecture)
+    app_name        = derived from manifest (<PackageName>)
+    audience        = "team"
+    focus/skip      = none (all components)
+- Diagram type is auto-selected from the detected project type (no confirmation asked;
+  the selected type appears in the IR JSON and is visible in the Step 4.5 plan review).
+- WF19 Step 4.5 IR plan review is the SINGLE confirmation gate — AI waits for
+  Approve / Change / Skip. All resource creation (apps create, diagrams create, generate)
+  is covered by this one approval.
+- AI still stops and asks in these genuine conflict cases (even in hands-free):
+    • Existing Vaxis diagram detected — Update vs. New version vs. Start fresh
+    • Multiple Vaxis projects match the derived app name (can't pick automatically)
+    • No manifest found and project type cannot be determined
+- AUTO MODE / ACCEPT EDITS: This is the correct mode for those settings. Auto Mode
+  auto-approves TOOL CALLS only — it cannot answer conversational text questions. In
+  hands-free mode all scope decisions resolve via tool calls (manifest reads, config reads)
+  and the IR plan is the only gate, which the user can approve as a single response.
 
 If Automated / CI:
+- PREFLIGHT is skipped entirely. All decisions come from stored config and env vars.
 - Add --json to every CLI call (disables interactive pickers and confirmations).
-- Skip ALL Rule 13 confirmation gates (CI exception applies).
+- Skip ALL Rule 13 confirmation gates, including the WF19 Step 4.5 IR plan review.
 - Ensure VAXIS_AUTH_URL env var is set and auth token is pre-provisioned.
 - Fail fast on 401 — do not prompt for login.
-
-Generation mode:
-- Store selection for the session. Before every generate call, check vaxis config show --json
-  and honor the stored generation_mode (see Rule 16).
-- Never switch modes on your own; never re-ask once set.
 ```
 
 ---
@@ -705,14 +713,11 @@ Use when the user pastes raw Mermaid into the chat or provides it from another t
 ```
 Get or create the share link (UC-68, UC-69):
 1. vaxis diagrams share <rootDiagramId> --json
-   → Returns { "url": "...", "edit_url": "...", "rotated": false }
+   → Returns { "diagram_id": "...", "shared": true, "url": "...", "token": "...", "rotated": false }
    A plain share call is non-destructive: returns the existing link if one already exists.
 
-2. Give the user the view link only (the `url` field from the response):
+2. Give the user the view link (the `url` field):
    "Here is your diagram: https://app.vaxis.dev/view/abc123"
-
-   Do NOT surface the edit link (edit_url / collab link) by default. Only mention it if the
-   user explicitly asks about collaborative editing or inviting teammates to co-edit.
 
 Revoke sharing (UC-71):
    vaxis diagrams share <diagramId> --revoke --json
@@ -724,11 +729,6 @@ Revoke sharing (UC-71):
 Rotate share link (UC-70) — use only when user explicitly requests:
    vaxis diagrams share <diagramId> --rotate --json
    Warn: "This invalidates the old link. Anyone you shared it with will need the new one."
-
-Collaborative editing — edit link explanation (UC-74):
-   The edit_url (also called edit_token in the response) enables real-time co-editing
-   in the browser. Mention it when finishing a design session with collaborators:
-   "Your team can co-edit live at: <edit_url>"
 
 Stale-state warning for concurrent edits (UC-72):
    Today the server uses last-write-wins (no conflict detection). If you know another
@@ -804,67 +804,134 @@ Never expose secret values or credentials as diagram node labels.
 
 ---
 
+### IR File Lifecycle
+
+Vaxis uses a JSON Intermediate Representation (IR) file as a structured diagram plan before
+any Vaxis resource (app, diagram) is created. This section explains who creates IR files,
+when, and where.
+
+**Who creates IR files?**
+The AI agent (Claude, GPT, Gemini — whichever is running this skill) creates IR files using
+its file-writing tools (e.g. the Write tool in Claude Code). The `vaxis` CLI only READS them
+via `vaxis diagrams plan <file>`. The CLI never creates, modifies, or manages IR files.
+
+This means IR file creation requires an AI environment with filesystem write access. In
+restricted environments (e.g. Claude.ai web without a filesystem tool), the AI cannot write
+the IR file and must inform the user.
+
+**When are they created?**
+IR files are created exactly once per diagram — during WF19 Step 4.5, before any Vaxis
+resource is created. They are not regenerated on every run. Lifecycle:
+
+```
+First run of WF19 for a project:
+  AI reads project files → generates IR JSON → saves .vaxis/<name>.ir.json
+  → AI calls: vaxis diagrams plan .vaxis/<name>.ir.json
+  → Shows plan to user → user approves
+  → AI creates Vaxis resources (app + diagrams)
+  → AI writes vaxis_app_id and vaxis_diagram_id back into the IR file
+
+Subsequent WF19 runs for the same project:
+  AI checks for .vaxis/<name>.ir.json → finds existing IR
+  → AI calls: vaxis diagrams plan .vaxis/<name>.ir.json → shows existing plan
+  → AI asks: "Use this plan, update it, or regenerate from the current code?"
+  → User chooses → proceeds accordingly
+```
+
+**Where do the files live?**
+```
+<project-root>/
+  .vaxis/
+    architecture-overview.ir.json     ← root diagram
+    auth-service.ir.json              ← child diagram (drill level 1)
+    form-engine.ir.json               ← child diagram (drill level 1)
+    form-engine-parser.ir.json        ← grandchild (drill level 2, depth_scope="deep" only)
+```
+
+**Git: commit or gitignore?**
+Both are valid. Two common patterns:
+- **Commit them**: IR files become living architecture documentation alongside code. Teams
+  can review diagram plan changes in PRs before diagrams are regenerated in Vaxis.
+- **Gitignore them**: Add `.vaxis/` to `.gitignore`. The AI regenerates from code each time.
+
+Neither is wrong — choose based on whether the team wants to track diagram plans in version
+control. If unsure, suggest committing: it makes the plan reviewable and keeps the
+`vaxis_app_id` / `vaxis_diagram_id` IDs persistent across sessions.
+
+**Industry comparison**
+This is closest to the Terraform plan-file pattern:
+- `terraform plan -out=plan.tfplan` creates a plan before applying
+- User reviews the plan, approves, `terraform apply` executes it
+- The state file records what was applied
+
+In Vaxis: the AI creates `.vaxis/<name>.ir.json` (plan), `vaxis diagrams plan` shows it,
+user approves, AI generates diagrams, IR is updated with the resulting IDs.
+
+---
+
 ### Workflow 19 — Generate initial architecture diagram from code
 
 ```
 Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What does this system look like?"
 
-0. REQUIRED QUESTIONS — ask ALL of these before reading any files. No skipping.
-   Do NOT infer answers from the user's message. Ask explicitly and wait for each response.
+0. PREFLIGHT — check WF0 mode before doing anything.
 
-   (a) Depth / scope — MANDATORY. Ask this even if the user said "diagram my project."
-       "How deep should I go?
+   Hands-free or CI mode → skip PREFLIGHT entirely. Proceed directly to Step 1 using defaults:
+     depth_scope     = "mid"
+     generation_mode = from `vaxis config show --json`; if unset → "mermaid"
+     diagram_name    = derived from manifest at Step 1 (<PackageName> Architecture)
+     app_name        = derived from manifest at Step 1 (<PackageName>)
+     audience        = "team"
+     focus/skip      = none (all components)
 
-       • High-level overview (1 level)
-         Root architecture only: major services, datastores, external APIs.
-         6–10 nodes. Drill markers added but NOT auto-expanded into child diagrams.
-         → depth_scope = overview
+   Interactive mode → before sending any questions, call `vaxis config show --json`.
+   If `generation_mode` is already "mermaid" or "prompt": store it and skip Q5 below.
 
-       • Detailed / deep dive (2 levels)
-         Root diagram + one level of subsystem diagrams (children of root composites).
-         Each composite service gets its own child diagram generated.
-         → depth_scope = detailed
+   Your FIRST RESPONSE in interactive mode must be this message. Do not read any file,
+   call any other CLI command, or make any assumptions first. Send exactly this and wait
+   for ALL answers before proceeding to Step 1:
 
-       • Complete project structure (N levels — as deep as needed)
-         Root → children → grandchildren → deeper, until every node is a leaf.
-         NOTE: This may take several minutes and create many diagrams.
-         → depth_scope = complete"
+   ───
+   "Before I start analyzing your project, I need [4 or 5] quick answers:
 
-   (b) For backend / API projects — MANDATORY once project type is known:
-       "Should I cover:
-       • Architecture only (services, flows, connections)
-       • Full API surface (every route with request/response payloads)
-       • Both"
+   **1. How deep should I go?**
+   → High-level — overall architecture and major components only (1 diagram, 6–10 nodes)
+   → Mid-level  — components with key internal relationships (root + 1 layer of child diagrams)
+   → Deep-level — full structure with all drill-downs (root + recursive child diagrams for every composite)
 
-   (c) For frontend / UI projects — MANDATORY once project type is known:
-       "Should I focus on:
-       • Technologies, frameworks, and design patterns
-       • Component structure and hierarchy
-       • Both"
+   **2. What does this project do?**
+   (1–2 sentences — helps me know what to emphasise)
 
-   (d) Generation mode — MANDATORY. Ask this even if WF0 was run, to confirm.
-       "Who should generate the diagrams?
-       → The AI I'm talking with right now (Claude/GPT/Gemini — I write the Mermaid with --mermaid)
-         Best for: any model, offline-friendly, deterministic, supports deep multi-level drills.
-       → The Vaxis server's built-in AI (I send your description with --prompt)
-         Best for: quick single-level overviews; subject to server rate limits.
-       NOTE: N-level recursive drill expansion only works with the first option."
-       → Store as generation_mode = mermaid | prompt
+   **3. What should I focus on, and what should I skip?**
+   (e.g. "auth and payment flows; skip test files and migration scripts")
 
-   (e) Project intent — MANDATORY. Do NOT start reading files until you have these answers.
-       "Tell me a bit about this project before I start:
-       • What does this project do? (1–2 sentences)
-       • Which parts are most important to capture? (e.g. auth flow, payment, API surface)
-       • Are there any areas to exclude? (e.g. test files, scripts, unrelated services)
-       • Who is the audience? (yourself, your team, external stakeholders)"
-       Use the answers to guide which files to read and what to emphasise in the diagram.
+   **4. Who will read this diagram?**
+   (just me / my team / external stakeholders)
 
-   Use all answers to shape file selection, node count, diagram type, and drill depth:
-   - depth_scope = overview  → entry points + top-level dirs only; 6–10 nodes; add drill markers but do NOT expand them
-   - depth_scope = detailed  → also read controllers/handlers; more nodes; expand root drills into child diagrams; no grandchildren
-   - depth_scope = complete  → read deeply per component; expand recursively until all leaves reached
-   - Architecture only → skip route enumeration; Full API surface → enumerate routes/payloads
-   - Component structure → classDiagram may fit better than flowchart
+   **5. Who generates the Mermaid?**  ← include only if generation_mode is not already in config
+   → The AI I'm talking with right now (Claude/GPT/Gemini) — I write Mermaid with --mermaid
+     Supports multi-level drill expansion; works offline; any model
+   → Vaxis server AI — I send your description with --prompt
+     Quick single-level overviews; subject to server rate limits; no recursive expansion
+
+   (I'll suggest a diagram name and project name after reading your manifest — you'll see
+   and approve them in the plan before anything is created.)"
+   ───
+
+   After receiving answers, store:
+   - depth_scope     = "high" | "mid" | "deep"  (from question 1)
+   - generation_mode = mermaid | prompt           (from question 5, or from stored config)
+
+   If Q5 was asked and answered: save with `vaxis config set-mode <mode>` so future runs
+   skip the question automatically.
+
+   Use all answers to shape file selection, IR content, diagram type, and drill depth:
+   - depth_scope = "high"  → entry points + top-level dirs only; 6–10 nodes; no drills in IR
+   - depth_scope = "mid"   → also read controllers/handlers; more nodes; 1–3 key composites in IR drills
+   - depth_scope = "deep"  → read deeply per component; all composites in IR drills; expand recursively
+   - For backend: use question 3 answers to decide whether to cover full API surface or architecture only
+   - For frontend: use question 3 answers to decide between component structure or design patterns
+   - Component-heavy answer → classDiagram may fit better than flowchart
 
 1. Read the top-level manifest: package.json, Cargo.toml, pom.xml, go.mod, pyproject.toml,
    docker-compose.yml. If no manifest found → list top-level directories and ask the user
@@ -877,92 +944,120 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
    - DB schema focus            → erDiagram
    - Default                    → flowchart TB
 
-   Confirm with the user: "I detected this is a [type] project — I'll use a [diagram type].
-   Does that sound right, or would you prefer a different style?" Wait for confirmation or
-   correction before continuing.
+   In Interactive mode: confirm with the user: "I detected this is a [type] project — I'll
+   use a [diagram type]. Does that sound right, or would you prefer a different style?" Wait
+   for confirmation or correction before continuing.
+
+   In Hands-free or CI mode: auto-select using the table above. Record the selection in the
+   IR JSON (diagram.type field) — it appears in the Step 4.5 plan review, not as a
+   separate question.
 
 3. Read entry points (src/main.*, index.*, app.*, server.*). Then list (don't recursively
    read) sub-directories; pick 3–5 representative files to read.
 
 4. Identify: major components, datastores, external services, inter-component connections.
 
-4b. Before creating any Vaxis resource, confirm with the user. Use AskUserQuestion when available:
-      "I've analyzed the codebase. Here's my plan before I set up Vaxis:
-       • App name: '<derived name>' — is that right?
-       • Account: logged in as <name> (<email>) — continue?
-       • Root diagram: [N] nodes — [ComponentA], [ComponentB], [DatastoreX], ...
-       • Drill-downs for: [ComponentA], [ComponentB] (composite services)
-       • No drill for: [DatastoreX], [ExternalAPI] (leaf nodes)
-       • Depth: [overview = root only | detailed = root + children | complete = root + children + grandchildren + ...]
-       • Estimated diagrams to create: [1 for overview | ~N for detailed | N+ for complete]
-      Shall I proceed, or would you like to adjust the scope or depth?"
-    Wait for explicit confirmation before calling apps create.
-    If the user provides a different name, adjusts scope, changes depth, or removes/adds drill
-    targets, apply their changes before continuing.
+4.5. IR GENERATION — create the structured diagram plan before any Vaxis resource is created.
 
-5. If no existing Vaxis project/diagram for this codebase:
-      vaxis apps create "<project-name>" --json          → save appId
-      vaxis diagrams create <appId> "Architecture Overview" --json   → save diagramId
+   a. Check for an existing plan:
+      Look for .vaxis/<diagram-name>.ir.json in the project root.
+      If found: call `vaxis diagrams plan .vaxis/<name>.ir.json`, show the output, then ask:
+      "I found a previous plan for this project. Use it, update it, or regenerate from the current code?"
 
-6. Get the format spec:
-      vaxis diagrams format --json
-   Synthesise Mermaid following all authoring rules. Add %% vaxis:drill <nodeId>
-   for every composite service node (leaf nodes — databases, caches, external APIs — get NO drill).
+   b. Generate the IR JSON and save it:
+      Write .vaxis/<diagram-name>.ir.json (create the .vaxis/ directory if it doesn't exist).
+      Required structure:
+        version: "1"
+        diagram: { name, type, direction, purpose, audience, vaxis_app_id: null, vaxis_diagram_id: null }
+        project: { name, description, depth_scope, generation_mode, source_files_analyzed[] }
+        nodes[]: { id, label, shape, role, description
+                   [+ responsibilities[], source_files[] for "mid" and "deep"]
+                   [+ rationale, drill_rationale for "deep"]
+                   drill: true|false }
+        edges[]: { source, target, label
+                   [+ description, protocol for "mid" and "deep"] }
+        drills[]: { nodeId, diagram_name, context, estimated_nodes, source_files[], vaxis_diagram_id: null }
+      Populate according to depth_scope:
+        "high"  → nodes: description only; edges: label only; drills: []
+        "mid"   → nodes: + responsibilities, source_files; edges: + description, protocol;
+                  drills: 1–3 key composite services
+        "deep"  → nodes: all fields including rationale; edges: all fields;
+                  drills: ALL composite services (leaf nodes get drill: false, no drills[] entry)
 
-6b. PREVIEW & CONFIRM — show the Mermaid BEFORE saving. Do NOT call diagrams generate yet.
+   c. Show the plan to the user:
+      Run: vaxis diagrams plan .vaxis/<diagram-name>.ir.json
+      Show the CLI output verbatim. Do NOT paraphrase the IR or expose raw JSON.
 
-    Present the full synthesised Mermaid to the user in a code block:
+   d. Wait for explicit response:
+      → Approve — proceed to Step 5
+      → Change  — edit .vaxis/<name>.ir.json with the user's adjustments (add/remove nodes,
+                  change depth, rename, adjust drill targets), re-run
+                  `vaxis diagrams plan .vaxis/<name>.ir.json`, show updated output — loop until approved
+      → Skip    — abort; do not create any Vaxis resource
 
-    "Here is the diagram I've prepared based on the codebase:
+5. Check for existing Vaxis resources before creating anything:
 
-    ```mermaid
-    [full Mermaid code here]
-    ```
+   a. Check the IR file: if vaxis_app_id and vaxis_diagram_id are already set → existing resources.
+      Otherwise: vaxis apps list --json → fuzzy match on app_name from the IR.
 
-    Summary:
-    • [N] nodes: [list all component names]
-    • Drill-downs planned for: [list drill nodes] (these will become child diagrams)
-    • No drill for: [list leaf nodes — databases, external APIs, caches]
-    • Estimated total diagrams after expansion: [1 | ~N | N+]
+   b. If an existing diagram is found (all modes except CI):
+      Ask: "I found an existing diagram '<name>' in project '<app>'. What would you like to do?
+             → Update it — reflect current code changes (I'll run Workflow 20)
+             → New version — create a new diagram alongside the existing one
+             → Start fresh — replace the existing diagram with a newly generated one"
+      → Update     : stop WF19 here; hand off to Workflow 20 with the existing diagramId.
+      → New version: use existing appId; call vaxis diagrams create <appId> "<new-name>" --json → save new diagramId.
+      → Start fresh: use existing appId + diagramId (generate will overwrite the diagram content).
 
-    Does this look right? You can:
-    → Approve — I'll save this to Vaxis and expand the drills
-    → Request changes — tell me what to adjust and I'll revise before saving
-    → Cancel — I'll discard this and start over"
+   c. If no existing resources (or CI mode with no match):
+      vaxis apps create "<app_name from IR>" --json          → save appId
+      vaxis diagrams create <appId> "<diagram_name from IR>" --json   → save diagramId
+      (These calls are covered by the Step 4.5 IR approval — no separate confirmation needed.)
 
-    Wait for explicit user response. If changes are requested, revise the Mermaid and show
-    the preview again from the top of this step. ONLY call diagrams generate after the user
-    explicitly says to proceed.
+   Update .vaxis/<name>.ir.json: set diagram.vaxis_app_id and diagram.vaxis_diagram_id, save.
+
+6. Compile Mermaid from the approved IR (.vaxis/<diagram-name>.ir.json):
+   - shape "rectangle"  → nodeId["Label"]
+   - shape "cylinder"   → nodeId[("Label")]
+   - shape "rhombus"    → nodeId{"Label?"}
+   - Each edge: source --> |"label"| target  (omit |"label"| if the label field is empty)
+   - After the full diagram: emit %% vaxis:drill <nodeId> for every node where drill = true
+   - Apply classDef coloring per authoring Rule 8
+   - Run `vaxis diagrams format --json` if you need to reference the full authoring rule set.
 
 7. Generate root diagram:
       vaxis diagrams generate <diagramId> --mermaid "<full mermaid>" --json
    Save the list of child diagram IDs from drills[] in the response.
 
---- DRILL EXPANSION LOOP — skip entirely if depth_scope = "overview" ---
+--- DRILL EXPANSION LOOP — skip entirely if depth_scope = "high" ---
 
-8. For each child diagram ID in drills[] from Step 7:
+8. For each entry in IR.drills[] (matched to child diagram IDs returned in Step 7):
 
-   a. Identify which codebase component this child represents (from the node name/ID in the root).
-   b. Read the relevant source files for that component:
-      - Service / module  → its controller/handler files, route definitions, key internal modules
-      - Domain / bounded context → its directory structure and core logic files
-      - UI section → its component files and state management
-   c. Synthesise Mermaid for the child diagram following all authoring rules:
-      - If depth_scope = "complete": add %% vaxis:drill for any sub-composites found inside
-        this component. Leaf nodes (external calls, atomic functions, databases) get NO drill.
-      - If depth_scope = "detailed": emit NO %% vaxis:drill markers — this child is a leaf diagram.
-   d. Generate the child:
+   a. Read the source files listed in drills[i].source_files.
+
+   b. Generate the child IR and save to .vaxis/<child-diagram-name>.ir.json:
+      - diagram: name = drills[i].diagram_name, purpose = drills[i].context; inherit type, direction, audience
+      - project: copy from parent IR (same project, same depth_scope, same generation_mode)
+      - nodes[]: internal sub-components of this service/module
+      - edges[]: internal connections within this service
+      - drills[]: add sub-composites only if depth_scope = "deep"; leave empty if depth_scope = "mid"
+
+   c. Show the child plan to the user:
+      Run: vaxis diagrams plan .vaxis/<child-name>.ir.json
+      Show the output. Wait for Approve / Change / Skip.
+
+   d. If approved: compile child Mermaid from the child IR (same shape/edge/drill rules as Step 6), then:
         vaxis diagrams generate <childId> --mermaid "<child-mermaid>" --json
-   e. Save any grandchild diagram IDs from drills[] in the response.
+      Update child IR: set drills[i].vaxis_diagram_id = childId, save to .vaxis/<child-name>.ir.json.
+      Save any grandchild diagram IDs from the generate response.
 
-9. If depth_scope = "complete" and grandchild IDs were saved in Step 8:
+9. If depth_scope = "deep" and grandchild IDs were saved in Step 8:
 
-   Repeat Step 8 for each grandchild (reading the relevant sub-component files, synthesising
-   Mermaid with drill markers for any further composites, generating). Then repeat for each
-   great-grandchild, and so on.
+   Repeat Step 8 for each grandchild (generating child IR, showing plan, confirming, compiling
+   Mermaid, generating). Then repeat for great-grandchildren and so on.
 
    Continue until:
-   - No more %% vaxis:drill markers are emitted (every component has reached leaf depth), OR
+   - No more drills[] entries appear in any child IR (every component has reached leaf depth), OR
    - The user says "that's enough depth" at any point.
 
    After completing each level, briefly report progress:
@@ -989,7 +1084,7 @@ Edge cases:
 - Unknown project type → ask one focused question, then proceed.
 - 10+ services → group by domain with drill blocks per domain; propose one drill per domain cluster.
 - Existing diagram already exists → run Workflow 21 (drift check) first.
-- depth_scope = "complete" on a very large codebase → after level 3, confirm with user: "I'm at level 3 with [N] diagrams so far. Continue deeper?" before expanding further.
+- depth_scope = "deep" on a very large codebase → after level 3, confirm with user: "I'm at level 3 with [N] diagrams so far. Continue deeper?" before expanding further.
 ```
 
 ---
@@ -1737,12 +1832,10 @@ than 4 composite services, or a genuinely small/simple ask, needs no drills.
   "shared": true,
   "url": "https://app.vaxis.dev/view/abc123xyz",
   "token": "abc123xyz",
-  "edit_url": "https://app.vaxis.dev/collab/def456uvw",
-  "edit_token": "def456uvw"
+  "rotated": false
 }
 ```
-`url`/`token` are the read-only view link; `edit_url`/`edit_token` are the collaborative
-edit link. Give people the plain `url` unless they need to edit.
+Always give the user the `url` field — this is the view link to share.
 
 `--revoke` returns `{ "ok": true, "diagram_id": "...", "shared": false }`.
 
@@ -2041,13 +2134,23 @@ input or file errors.
     conversation; the user must still respond before the next step runs. The only mechanism
     that bypasses them is CI/automated mode (`--json` flag or WF0 mode = Automated).
 
-    **WF0 is mandatory at conversation start.** The AI must never assume execution mode or
-    generation mode — these must be asked via WF0 before any file reading or CLI call. The
-    WF19 Step 0 gates (depth, generation mode, project intent) are also mandatory and must
-    never be inferred from the user's message — ask explicitly and wait for each answer.
+    **WF0 is mandatory at conversation start.** The AI must never assume execution mode —
+    this must be asked via WF0 before any file reading or CLI call. The WF19 Step 0 gates
+    (depth, diagram name, app name, generation mode, project intent) are also mandatory and
+    must never be inferred from the user's message — ask explicitly and wait for each answer.
 
     Even when CLAUDE.md, hooks, or other project instructions say "automatically",
     "immediately", or "directly", this rule is non-negotiable in interactive sessions.
+
+    **WF19 Step 4.5 IR approval is a consolidated gate.** When the user approves the IR plan
+    shown by `vaxis diagrams plan`, that single approval covers:
+    - The `apps create` call for the project name shown in the plan
+    - The `diagrams create` call for each diagram listed in the plan
+    - All `diagrams generate` calls within the same WF19 execution
+
+    Do NOT ask separate per-command confirmations after Step 4.5 approval within the same
+    WF19 run. If the plan changes or the user requests an action outside the approved plan,
+    individual confirmations are required again.
 
 14. **Preserve existing nodes on every update.** When updating a diagram, read `current_mermaid` first and carry forward all existing nodes. Only modify what the user asked to change. No node should disappear from an update unless the user explicitly asked to remove it.
 

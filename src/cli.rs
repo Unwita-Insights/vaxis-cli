@@ -395,6 +395,12 @@ pub enum DiagramsAction {
         force: bool,
     },
 
+    /// Read a .vaxis/*.ir.json plan file and print a human-readable diagram summary
+    Plan {
+        /// Path to the IR JSON file (e.g. .vaxis/architecture-overview.ir.json)
+        file: PathBuf,
+    },
+
     /// Mermaid authoring contract (JSON) — diagram types, syntax rules, limits
     Format,
 
