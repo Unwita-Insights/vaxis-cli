@@ -368,6 +368,8 @@ Ask the user:
   diagram plan before executing and only stop if I hit a genuine conflict I can't resolve
   (e.g. an existing diagram found with ambiguous intent, or multiple projects matching the
   same name). Best for: Auto Mode, Accept Edits, quick iterations on familiar projects.
+  Note: "Hands-free" skips PREFLIGHT questions only — Step 4.5 IR plan is still mandatory
+  and is your single confirmation gate before any Vaxis resource is created.
 
 → Automated / CI — No questions at any step. I use defaults and --json on all calls.
   Requires VAXIS_AUTH_URL env var and a pre-provisioned auth token."
@@ -379,7 +381,7 @@ If Interactive:
 
 If Hands-free:
 - PREFLIGHT is skipped entirely. Defaults apply:
-    depth_scope     = "mid"
+    depth_scope     = "high"
     generation_mode = from `vaxis config show --json`; if unset → "mermaid"
     diagram_name    = derived from manifest (<PackageName> Architecture)
     app_name        = derived from manifest (<PackageName>)
@@ -877,27 +879,57 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
 0. PREFLIGHT — check WF0 mode before doing anything.
 
    Hands-free or CI mode → skip PREFLIGHT entirely. Proceed directly to Step 1 using defaults:
-     depth_scope     = "mid"
+     depth_scope     = "high"
      generation_mode = from `vaxis config show --json`; if unset → "mermaid"
      diagram_name    = derived from manifest at Step 1 (<PackageName> Architecture)
      app_name        = derived from manifest at Step 1 (<PackageName>)
      audience        = "team"
      focus/skip      = none (all components)
 
+   Skipping PREFLIGHT does NOT skip Step 4.5. In Hands-free mode, writing the IR file
+   and running `vaxis diagrams plan` remains mandatory — it is the ONLY user-facing
+   confirmation gate before any resource creation. Step 4.5 is skipped ONLY in
+   Automated / CI mode.
+
+   Before running PREFLIGHT (all modes): scan the project's .vaxis/ directory for any *.ir.json files.
+
+   If an IR file is found (Interactive and Hands-free modes):
+     Run: vaxis diagrams plan .vaxis/<name>.ir.json
+     Show the output verbatim, then ask:
+     "I found an existing diagram plan for this project. What would you like to do?
+      → Use existing plan — nothing has changed; proceed to create or update Vaxis diagrams
+        (I will NOT re-read your code — the plan above is used as-is)
+      → Re-analyze code  — your code has changed; I'll re-read the project and rebuild the
+        plan to reflect the current state, then update the diagram
+      → Start fresh      — start over with new settings (depth, focus, etc.)"
+
+     Use existing plan → skip PREFLIGHT and Steps 1–4; go directly to Step 4.5b (show plan, then 4.5c)
+     Re-analyze code   → skip PREFLIGHT (keep existing depth/audience/settings from old IR);
+                         redo Steps 1–4 with current code; regenerate IR; go to Step 4.5a
+     Start fresh       → run PREFLIGHT below from scratch; redo Steps 1–4; new IR
+
+   If an IR file is found (CI mode): use it directly without asking; skip to Step 4.5b.
+   If no IR file is found: run PREFLIGHT below normally.
+
    Interactive mode → before sending any questions, call `vaxis config show --json`.
    If `generation_mode` is already "mermaid" or "prompt": store it and skip Q5 below.
+   If the user already stated "high-level" or "deep-level" in their opening message: store
+   that as depth_scope and skip Q1 below.
 
    Your FIRST RESPONSE in interactive mode must be this message. Do not read any file,
    call any other CLI command, or make any assumptions first. Send exactly this and wait
    for ALL answers before proceeding to Step 1:
 
    ───
-   "Before I start analyzing your project, I need [4 or 5] quick answers:
+   "Before I start analyzing your project, I need [3, 4, or 5] quick answers:
 
-   **1. How deep should I go?**
-   → High-level — overall architecture and major components only (1 diagram, 6–10 nodes)
-   → Mid-level  — components with key internal relationships (root + 1 layer of child diagrams)
-   → Deep-level — full structure with all drill-downs (root + recursive child diagrams for every composite)
+   **1. How deep should I go?**  ← skip if the user already stated a depth level
+   → High-level — root diagram of major system boundaries + one drill per boundary showing
+     the key technologies, frameworks, and primary modules inside each part.
+     Answers: "What is this system made of and what runs each part?"
+   → Deep-level — recursive hierarchy going as deep as the code allows: major boundaries →
+     internal modules → sub-structure of each module.
+     Answers: "How does every part work internally?"
 
    **2. What does this project do?**
    (1–2 sentences — helps me know what to emphasise)
@@ -919,16 +951,19 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
    ───
 
    After receiving answers, store:
-   - depth_scope     = "high" | "mid" | "deep"  (from question 1)
+   - depth_scope     = "high" | "deep"  (from question 1)
    - generation_mode = mermaid | prompt           (from question 5, or from stored config)
 
    If Q5 was asked and answered: save with `vaxis config set-mode <mode>` so future runs
    skip the question automatically.
 
    Use all answers to shape file selection, IR content, diagram type, and drill depth:
-   - depth_scope = "high"  → entry points + top-level dirs only; 6–10 nodes; no drills in IR
-   - depth_scope = "mid"   → also read controllers/handlers; more nodes; 1–3 key composites in IR drills
-   - depth_scope = "deep"  → read deeply per component; all composites in IR drills; expand recursively
+   - depth_scope = "high"  → read manifests, top-level dirs, entry points, key config files;
+                              6–10 root nodes showing major system boundaries;
+                              IR drills[]: one per major composite node, each revealing the
+                              technologies/frameworks/primary modules inside (one level only)
+   - depth_scope = "deep"  → read deeply per component (source, route, schema, component files, etc.);
+                              all composites in IR drills[]; expand recursively until leaf-level nodes
    - For backend: use question 3 answers to decide whether to cover full API surface or architecture only
    - For frontend: use question 3 answers to decide between component structure or design patterns
    - Component-heavy answer → classDiagram may fit better than flowchart
@@ -957,38 +992,35 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
 
 4. Identify: major components, datastores, external services, inter-component connections.
 
-4.5. IR GENERATION — create the structured diagram plan before any Vaxis resource is created.
+4.5. IR GENERATION — MANDATORY in Interactive and Hands-free modes; skipped only in CI mode.
+     Create the structured diagram plan before any Vaxis resource is created.
+     Write the IR file to disk even in Hands-free mode — this step is NOT part of PREFLIGHT.
+     (Existence check was performed before PREFLIGHT — see Step 0 above.)
 
-   a. Check for an existing plan:
-      Look for .vaxis/<diagram-name>.ir.json in the project root.
-      If found: call `vaxis diagrams plan .vaxis/<name>.ir.json`, show the output, then ask:
-      "I found a previous plan for this project. Use it, update it, or regenerate from the current code?"
-
-   b. Generate the IR JSON and save it:
+   a. Generate the IR JSON and save it:
       Write .vaxis/<diagram-name>.ir.json (create the .vaxis/ directory if it doesn't exist).
       Required structure:
         version: "1"
         diagram: { name, type, direction, purpose, audience, vaxis_app_id: null, vaxis_diagram_id: null }
         project: { name, description, depth_scope, generation_mode, source_files_analyzed[] }
         nodes[]: { id, label, shape, role, description
-                   [+ responsibilities[], source_files[] for "mid" and "deep"]
+                   [+ responsibilities[], source_files[] for "high" and "deep"]
                    [+ rationale, drill_rationale for "deep"]
                    drill: true|false }
         edges[]: { source, target, label
-                   [+ description, protocol for "mid" and "deep"] }
+                   [+ description, protocol for "high" and "deep"] }
         drills[]: { nodeId, diagram_name, context, estimated_nodes, source_files[], vaxis_diagram_id: null }
       Populate according to depth_scope:
-        "high"  → nodes: description only; edges: label only; drills: []
-        "mid"   → nodes: + responsibilities, source_files; edges: + description, protocol;
-                  drills: 1–3 key composite services
+        "high"  → nodes: + responsibilities, source_files; edges: + description, protocol;
+                  drills: one entry per major composite node (one level of drills only)
         "deep"  → nodes: all fields including rationale; edges: all fields;
-                  drills: ALL composite services (leaf nodes get drill: false, no drills[] entry)
+                  drills: ALL composite services recursively (leaf nodes get drill: false, no drills[] entry)
 
-   c. Show the plan to the user:
+   b. Show the plan to the user:
       Run: vaxis diagrams plan .vaxis/<diagram-name>.ir.json
       Show the CLI output verbatim. Do NOT paraphrase the IR or expose raw JSON.
 
-   d. Wait for explicit response:
+   c. Wait for explicit response:
       → Approve — proceed to Step 5
       → Change  — edit .vaxis/<name>.ir.json with the user's adjustments (add/remove nodes,
                   change depth, rename, adjust drill targets), re-run
@@ -1029,7 +1061,7 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
       vaxis diagrams generate <diagramId> --mermaid "<full mermaid>" --json
    Save the list of child diagram IDs from drills[] in the response.
 
---- DRILL EXPANSION LOOP — skip entirely if depth_scope = "high" ---
+--- DRILL EXPANSION LOOP — runs whenever IR.drills[] is non-empty; recursion (Step 9) is "deep" only ---
 
 8. For each entry in IR.drills[] (matched to child diagram IDs returned in Step 7):
 
@@ -1040,7 +1072,7 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
       - project: copy from parent IR (same project, same depth_scope, same generation_mode)
       - nodes[]: internal sub-components of this service/module
       - edges[]: internal connections within this service
-      - drills[]: add sub-composites only if depth_scope = "deep"; leave empty if depth_scope = "mid"
+      - drills[]: add sub-composites only if depth_scope = "deep"; leave empty if depth_scope = "high" (one level only)
 
    c. Show the child plan to the user:
       Run: vaxis diagrams plan .vaxis/<child-name>.ir.json
