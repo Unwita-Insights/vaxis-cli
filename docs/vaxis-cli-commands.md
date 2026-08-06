@@ -67,6 +67,8 @@ project and global scope.
 | `vaxis diagrams undo <id> --json` | Remove the last AI generation turn before retrying. |
 | `vaxis diagrams rename <id> <name> --json` | Rename a diagram without changing its content. |
 | `vaxis diagrams delete <id> --force --json` | Delete a diagram and all descendants non-interactively. Without `--json`, omit the ID or `--force` to use prompts. |
+| `vaxis diagrams plan <ir-file>` | Read a `.vaxis/*.ir.json` plan file and print a human-readable diagram summary (no auth required). |
+| `vaxis diagrams plan <ir-file> --json` | Return the same plan summary as structured JSON. |
 | `vaxis diagrams format --json` | Return the offline Mermaid authoring contract, supported types, rules, and limits. |
 | `vaxis diagrams rules-check --json` | Compare the embedded authoring contract with the connected server. |
 | `vaxis diagrams evaluate --captures <file> [--output <file>] --json` | Evaluate recorded direct/native Mermaid outputs against the parity catalog. |
