@@ -433,6 +433,17 @@ pub enum DiagramsAction {
         #[arg(long, conflicts_with = "mermaid")]
         file: Option<PathBuf>,
     },
+
+    /// Validate (and optionally repair) a Mermaid diagram before sending to Vaxis
+    Lint {
+        /// Path to a Mermaid file, or '-' to read from stdin
+        #[arg(value_name = "FILE")]
+        file: String,
+
+        /// Auto-repair fixable issues and write the result back to FILE (ignored when FILE is '-')
+        #[arg(long)]
+        fix: bool,
+    },
 }
 
 #[derive(Subcommand)]

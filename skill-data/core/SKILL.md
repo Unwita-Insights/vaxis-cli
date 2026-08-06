@@ -446,8 +446,12 @@ If Automated / CI:
 6. Tell the user what was created. Offer to drill into any subsystem.
 
 7. vaxis diagrams share <ROOT_ID> --json
-   → Give the user the shareable link at the end of the session. Share the ROOT
-     diagram — the link covers the diagrams it drills into.
+   → Give the user the view link (the `url` field). Share the ROOT diagram — the link
+     covers the diagrams it drills into.
+   → Make clear the link is view-only:
+     "Here is your diagram: <url>
+      This link is view-only — anyone with it can see the diagram but cannot make changes.
+      To edit, log in to the Vaxis app and open the diagram from your dashboard."
 ```
 
 ### Workflow 2 — Select project when user hasn't specified one
@@ -718,8 +722,11 @@ Get or create the share link (UC-68, UC-69):
    → Returns { "diagram_id": "...", "shared": true, "url": "...", "token": "...", "rotated": false }
    A plain share call is non-destructive: returns the existing link if one already exists.
 
-2. Give the user the view link (the `url` field):
-   "Here is your diagram: https://app.vaxis.dev/view/abc123"
+2. Give the user the view link only (the `url` field from the response) and make clear it is
+   view-only:
+   "Here is your diagram: https://app.vaxis.dev/view/abc123
+    This link is view-only — anyone with it can see the diagram but cannot make changes.
+    To edit, log in to the Vaxis app and open the diagram from your dashboard."
 
 Revoke sharing (UC-71):
    vaxis diagrams share <diagramId> --revoke --json
@@ -1027,6 +1034,18 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
                   `vaxis diagrams plan .vaxis/<name>.ir.json`, show updated output — loop until approved
       → Skip    — abort; do not create any Vaxis resource
 
+6c. LINT & AUTO-REPAIR — after compiling Mermaid from the IR and before every generate call:
+    Write the compiled Mermaid to `.vaxis/<diagram-name>.mmd`, then:
+      vaxis diagrams lint .vaxis/<diagram-name>.mmd --fix --json
+
+    Parse the JSON response:
+    • `valid: true`  → proceed. The file now contains the final (possibly auto-repaired) Mermaid.
+    • `valid: false` → read `issues[]` where `severity: "error"`, fix each reported error,
+      rewrite `.vaxis/<diagram-name>.mmd`, and run lint again. Repeat until `valid: true`.
+
+    Use the file content (NOT the originally compiled string) for the `--mermaid` argument.
+    Do NOT call `diagrams generate` while `valid: false`.
+
 5. Check for existing Vaxis resources before creating anything:
 
    a. Check the IR file: if vaxis_app_id and vaxis_diagram_id are already set → existing resources.
@@ -1078,8 +1097,12 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
       Run: vaxis diagrams plan .vaxis/<child-name>.ir.json
       Show the output. Wait for Approve / Change / Skip.
 
-   d. If approved: compile child Mermaid from the child IR (same shape/edge/drill rules as Step 6), then:
-        vaxis diagrams generate <childId> --mermaid "<child-mermaid>" --json
+   d. If approved: compile child Mermaid from the child IR (same shape/edge/drill rules as Step 6),
+      lint then generate:
+        Write the child Mermaid to `.vaxis/<child-name>.mmd`, run:
+          vaxis diagrams lint .vaxis/<child-name>.mmd --fix --json
+        Fix any errors and repeat lint until `valid: true`, then:
+          vaxis diagrams generate <childId> --mermaid "$(cat .vaxis/<child-name>.mmd)" --json
       Update child IR: set drills[i].vaxis_diagram_id = childId, save to .vaxis/<child-name>.ir.json.
       Save any grandchild diagram IDs from the generate response.
 
@@ -1108,8 +1131,10 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
 
 11. Share the root diagram (the share link gives access to the full tree):
        vaxis diagrams share <rootDiagramId> --json
-    Give the user the view link only (the `url` field):
-    "Here is your diagram: <url>"
+    Give the user the view link only (the `url` field) and make clear it is view-only:
+    "Here is your diagram: <url>
+     This link is view-only — anyone with it can see the diagram but cannot make changes.
+     To edit, log in to the Vaxis app and open the diagram from your dashboard."
     Do NOT surface the edit_url/collab link unless the user explicitly asks about co-editing.
 
 Edge cases:
@@ -2132,7 +2157,7 @@ input or file errors.
 
 9. **Edit large diagrams by regenerating with care.** If the user asks to add or remove specific nodes on a diagram that already has many nodes, read `current_mermaid` first, then resend the FULL updated Mermaid via `generate --mermaid` — carrying every existing node forward unchanged. There is no diff/patch endpoint; you are the AI, so you make the edit (see Workflow 14 and Rule 14).
 
-10. **End every session with a shareable link.** After completing a design session, call `vaxis diagrams share <rootDiagramId> --json` and give the user the **view link** (`url` field) directly — "Here is your diagram: &lt;url&gt;". Do NOT surface the edit link (`edit_url` / collab link) by default; only mention it if the user explicitly asks about collaborative editing. They should never need to open the web app to find the link. Share the ROOT diagram — one link covers the sub-diagrams it drills into. Never `--rotate` just to fetch a link; a plain `share` already returns the existing one, and rotating breaks links the user has handed out.
+10. **End every session with a shareable link.** After completing a design session, call `vaxis diagrams share <rootDiagramId> --json` and give the user the **view link** (`url` field) directly, making clear it is view-only: "Here is your diagram: &lt;url&gt;. This link is view-only — to make changes, log in to the Vaxis app and open the diagram from your dashboard." Do NOT surface the edit link (`edit_url` / collab link) by default; only mention it if the user explicitly asks about collaborative editing or inviting teammates to co-edit live. Share the ROOT diagram — one link covers the sub-diagrams it drills into. Never `--rotate` just to fetch a link; a plain `share` already returns the existing one, and rotating breaks links the user has handed out.
 
 11. **Reuse context before fetching.** If diagram IDs or app IDs were established earlier in the conversation, use them directly. Only re-fetch with `apps list` or `diagrams list` when the context is genuinely unclear.
 
