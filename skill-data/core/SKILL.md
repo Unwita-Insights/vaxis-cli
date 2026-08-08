@@ -443,13 +443,10 @@ If Automated / CI:
 
 6. Tell the user what was created. Offer to drill into any subsystem.
 
-7. vaxis diagrams share <ROOT_ID> --json
-   → Give the user the view link (the `url` field). Share the ROOT diagram — the link
-     covers the diagrams it drills into.
-   → Make clear the link is view-only:
-     "Here is your diagram: <url>
-      This link is view-only — anyone with it can see the diagram but cannot make changes.
-      To edit, log in to the Vaxis app and open the diagram from your dashboard."
+7. Give the user the direct diagram link — no share API call needed.
+   Construct the URL from the root diagram ID (use the auth_url base from
+   `vaxis config show --json` if a custom host is configured; default: https://app.vaxis.dev):
+   "Here is your diagram: https://app.vaxis.dev/diagram/<ROOT_ID>"
 ```
 
 ### Workflow 2 — Select project when user hasn't specified one
@@ -712,19 +709,16 @@ Use when the user pastes raw Mermaid into the chat or provides it from another t
 4. Confirm: "Done — imported your diagram to [project name]. You can view it in the Vaxis web app."
 ```
 
-### Workflow 16 — End session with shareable link
+### Workflow 16 — End session with diagram link
 
 ```
-Get or create the share link (UC-68, UC-69):
-1. vaxis diagrams share <rootDiagramId> --json
-   → Returns { "diagram_id": "...", "shared": true, "url": "...", "token": "...", "rotated": false }
-   A plain share call is non-destructive: returns the existing link if one already exists.
+Give the user the direct diagram link (UC-68, UC-69):
+1. Construct the URL from the diagram ID (already known — no API call needed):
+   https://app.vaxis.dev/diagram/<rootDiagramId>
+   (Use the auth_url base from `vaxis config show --json` if a custom host is configured.)
 
-2. Give the user the view link only (the `url` field from the response) and make clear it is
-   view-only:
-   "Here is your diagram: https://app.vaxis.dev/view/abc123
-    This link is view-only — anyone with it can see the diagram but cannot make changes.
-    To edit, log in to the Vaxis app and open the diagram from your dashboard."
+2. Give the user the link:
+   "Here is your diagram: https://app.vaxis.dev/diagram/<rootDiagramId>"
 
 Revoke sharing (UC-71):
    vaxis diagrams share <diagramId> --revoke --json
@@ -1195,13 +1189,10 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
       • Level 3 (grandchildren): <SubComponentX>, ...
       …"
 
-11. Share the root diagram (the share link gives access to the full tree):
-       vaxis diagrams share <rootDiagramId> --json
-    Give the user the view link only (the `url` field) and make clear it is view-only:
-    "Here is your diagram: <url>
-     This link is view-only — anyone with it can see the diagram but cannot make changes.
-     To edit, log in to the Vaxis app and open the diagram from your dashboard."
-    Do NOT surface the edit_url/collab link unless the user explicitly asks about co-editing.
+11. Give the user the direct diagram link for the root diagram (no share API call needed):
+    https://app.vaxis.dev/diagram/<rootDiagramId>
+    (Use the auth_url base from `vaxis config show --json` if a custom host is configured.)
+    "Here is your diagram: https://app.vaxis.dev/diagram/<rootDiagramId>"
 
 Edge cases:
 - Unknown project type → ask one focused question, then proceed.
@@ -1958,7 +1949,8 @@ than 4 composite services, or a genuinely small/simple ask, needs no drills.
   "rotated": false
 }
 ```
-Always give the user the `url` field — this is the view link to share.
+For direct diagram access, use: https://app.vaxis.dev/diagram/<diagramId>
+The `url` field (public view token) is only needed when explicitly creating a public share link.
 
 `--revoke` returns `{ "ok": true, "diagram_id": "...", "shared": false }`.
 
@@ -2223,7 +2215,7 @@ input or file errors.
 
 9. **Edit large diagrams by regenerating with care.** If the user asks to add or remove specific nodes on a diagram that already has many nodes, read `current_mermaid` first, then resend the FULL updated Mermaid via `generate --mermaid` — carrying every existing node forward unchanged. There is no diff/patch endpoint; you are the AI, so you make the edit (see Workflow 14 and Rule 14).
 
-10. **End every session with a shareable link.** After completing a design session, call `vaxis diagrams share <rootDiagramId> --json` and give the user the **view link** (`url` field) directly, making clear it is view-only: "Here is your diagram: &lt;url&gt;. This link is view-only — to make changes, log in to the Vaxis app and open the diagram from your dashboard." Do NOT surface the edit link (`edit_url` / collab link) by default; only mention it if the user explicitly asks about collaborative editing or inviting teammates to co-edit live. Share the ROOT diagram — one link covers the sub-diagrams it drills into. Never `--rotate` just to fetch a link; a plain `share` already returns the existing one, and rotating breaks links the user has handed out.
+10. **End every session with a diagram link.** After completing a design session, give the user the direct diagram URL constructed from the root diagram ID — no API call needed: `https://app.vaxis.dev/diagram/<rootDiagramId>`. Use the root diagram ID — it covers the full drill tree. Use the `auth_url` base from `vaxis config show --json` if a custom host is configured; fall back to `https://app.vaxis.dev`.
 
 11. **Reuse context before fetching.** If diagram IDs or app IDs were established earlier in the conversation, use them directly. Only re-fetch with `apps list` or `diagrams list` when the context is genuinely unclear.
 
