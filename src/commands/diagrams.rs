@@ -15,7 +15,8 @@ fn auth_token() -> Option<String> {
 fn preflight_mermaid(mermaid: &str, json: bool) -> bool {
     use crate::mermaid_lint::{lint, Level};
     let report = lint(mermaid);
-    if report.issues.is_empty() {
+    // Fixed-level issues (auto-repaired by lint) are informational; they don't block.
+    if !report.has_errors() && report.warnings().next().is_none() {
         return true;
     }
     let has_errors = report.has_errors();
@@ -113,6 +114,10 @@ pub async fn run(action: DiagramsAction, json: bool) {
             plan_cmd(file, json);
             return;
         }
+        DiagramsAction::Lint { file, fix } => {
+            lint_cmd(file, *fix, json);
+            return;
+        }
         _ => {}
     }
 
@@ -194,6 +199,7 @@ pub async fn run(action: DiagramsAction, json: bool) {
             let content = resolve_import_content(mermaid, file, json);
             import_cmd(&token, &id, &content, json).await;
         }
+        DiagramsAction::Lint { .. } => {} // handled before auth gate
     }
 }
 
@@ -1998,6 +2004,108 @@ fn resolve_import_content(mermaid: Option<String>, file: Option<std::path::PathB
         eprintln!("{} Provide either --mermaid or --file", "✗".red());
     }
     std::process::exit(1);
+}
+
+fn lint_cmd(file: &str, fix: bool, json: bool) {
+    use crate::mermaid_lint::{lint, Level};
+
+    let original = if file == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        if let Err(e) = std::io::stdin().read_to_string(&mut buf) {
+            if json {
+                println!("{}", serde_json::json!({"error": "stdin_read_error", "message": e.to_string()}));
+            } else {
+                eprintln!("{} Could not read stdin: {}", "✗".red(), e);
+            }
+            std::process::exit(1);
+        }
+        buf
+    } else {
+        match std::fs::read_to_string(file) {
+            Ok(c) => c,
+            Err(e) => {
+                if json {
+                    println!("{}", serde_json::json!({"error": "file_read_error", "message": e.to_string()}));
+                } else {
+                    eprintln!("{} Could not read {}: {}", "✗".red(), file, e);
+                }
+                std::process::exit(1);
+            }
+        }
+    };
+
+    let report = lint(&original);
+
+    // If --fix and a real file path, write repaired content back.
+    if fix && file != "-" && report.repaired != original {
+        if let Err(e) = std::fs::write(file, &report.repaired) {
+            if json {
+                println!("{}", serde_json::json!({"error": "file_write_error", "message": e.to_string()}));
+            } else {
+                eprintln!("{} Could not write {}: {}", "✗".red(), file, e);
+            }
+            std::process::exit(1);
+        }
+    }
+
+    let valid = !report.has_errors();
+
+    if json {
+        let issues: Vec<serde_json::Value> = report.issues.iter().map(|i| {
+            let severity = match i.level {
+                Level::Error   => "error",
+                Level::Warning => "warning",
+                Level::Fixed   => "fixed",
+            };
+            serde_json::json!({
+                "severity": severity,
+                "code":     i.code,
+                "message":  i.message,
+                "line":     i.line,
+            })
+        }).collect();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "valid":    valid,
+            "repaired": report.repaired,
+            "issues":   issues,
+        })).unwrap_or_default());
+    } else {
+        let error_count   = report.errors().count();
+        let warning_count = report.warnings().count();
+        let fixed_count   = report.fixed().count();
+
+        if valid && error_count == 0 {
+            if fixed_count > 0 || warning_count > 0 {
+                println!("{} Valid  ({} auto-repaired, {} warning(s))", "✓".green().bold(), fixed_count, warning_count);
+            } else {
+                println!("{} Valid", "✓".green().bold());
+            }
+        } else {
+            println!("{} {} error(s)  — fix before sending to Vaxis", "✗".red().bold(), error_count);
+        }
+
+        for i in report.errors() {
+            let loc = i.line.map(|l| format!(" line {}", l)).unwrap_or_default();
+            eprintln!("  {}  {}{}", "error".red(), i.message, loc);
+        }
+        for i in report.warnings() {
+            let loc = i.line.map(|l| format!(" line {}", l)).unwrap_or_default();
+            eprintln!("  {}  {}{}", "warn".yellow(), i.message, loc);
+        }
+        for i in report.fixed() {
+            let loc = i.line.map(|l| format!(" line {}", l)).unwrap_or_default();
+            println!("  {}  {}{}", "fixed".cyan(), i.message, loc);
+        }
+
+        if !valid {
+            eprintln!("{} Run `vaxis diagrams format --json` for the full authoring contract.", "→".dimmed());
+        }
+    }
+
+    if !valid {
+        std::process::exit(1);
+    }
 }
 
 async fn import_cmd(token: &str, id: &str, mermaid: &str, json: bool) {

@@ -73,6 +73,7 @@ project and global scope.
 | `vaxis diagrams rules-check --json` | Compare the embedded authoring contract with the connected server. |
 | `vaxis diagrams evaluate --captures <file> [--output <file>] --json` | Evaluate recorded direct/native Mermaid outputs against the parity catalog. |
 | `vaxis diagrams import <id> --mermaid <source> --json` | Save raw Mermaid directly without calling AI. |
+| `vaxis diagrams lint <file> [--fix] [--json]` | Validate (and optionally auto-repair) a Mermaid file before sending to Vaxis. Exits 0 if valid, 1 if errors remain. `--fix` rewrites the file in-place with auto-repaired content (ignored for stdin). |
 
 ### Generate options
 
