@@ -194,6 +194,14 @@ Exception: **Whole-canvas transform** ("turn this into a hospital system") → t
 - **IDs:** camelCase or snake_case, alphanumeric + underscores only, no spaces.
 - Keep IDs short (1–3 words) — they become child diagram names.
 
+**When deriving labels from code identifiers:**
+- CamelCase → Title Case: `OrderService` → `Order Service`, `AuthMiddleware` → `Auth Middleware`
+- snake_case → Title Case: `user_repository` → `User Repository`
+- Strip file extensions: `config.ts` → `Config`
+- Expand common abbreviations: `auth` → `Authentication`, `svc` → `Service`, `repo` → `Repository`, `mgmt` → `Management`, `cfg` → `Configuration`, `msg` → `Message`, `proc` → `Processor`, `hdlr` → `Handler`
+- In parent/root diagrams prefer domain terms over technical suffixes: `Order Processing` over `Order Service`, `Users` over `UserRepository`. Technical suffixes (Service, Repository, Handler) are acceptable in deep-level drills.
+- Never use concatenated abbreviations: `MsgBrkr` → `Message Broker`, `APIGtwy` → `API Gateway`.
+
 ### 10. Limits
 
 - **50 nodes, 60 edges per diagram** (hard ceiling).
@@ -879,12 +887,20 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
 0. PREFLIGHT — check WF0 mode before doing anything.
 
    Hands-free or CI mode → skip PREFLIGHT entirely. Proceed directly to Step 1 using defaults:
-     depth_scope     = "high"
+     depth_scope     = "high"  (may be overridden by large-codebase heuristic — see below)
      generation_mode = from `vaxis config show --json`; if unset → "mermaid"
      diagram_name    = derived from manifest at Step 1 (<PackageName> Architecture)
      app_name        = derived from manifest at Step 1 (<PackageName>)
      audience        = "team"
      focus/skip      = none (all components)
+
+   Large-codebase depth override (Hands-free and CI modes):
+   After reading the manifest at Step 1, count the top-level packages or modules in the repo.
+   If ≥ 20 modules OR ≥ 50 source files are found → override depth_scope to "deep".
+   In Hands-free mode: notify the user before proceeding
+     ("Large codebase detected (X modules) — switching depth scope to 'deep'.")
+   In CI mode: apply silently and emit a JSON log line:
+     { "depth_auto": "deep", "reason": "≥20 modules detected" }
 
    Skipping PREFLIGHT does NOT skip Step 4.5. In Hands-free mode, writing the IR file
    and running `vaxis diagrams plan` remains mandatory — it is the ONLY user-facing
@@ -936,6 +952,14 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
          - label: "Deep-level"
            description: "Recursive hierarchy going as deep as the code allows: boundaries →
              internal modules → sub-structure of each module"
+
+   ⚠  HIGH-LEVEL CONTENT BOUNDARY — applies whenever depth_scope = "high":
+   The root diagram and all first-level child diagrams MUST NOT contain individual files,
+   classes, functions, routes, DB table names, or internal module structure.
+   If a node could be labeled with a file name, class name, or endpoint path, it belongs
+   in a drill — not a high-level diagram.
+   ✓ Valid high-level nodes: "Order Service", "Auth System", "Database Layer", "Payments"
+   ✗ Invalid high-level nodes: "order_controller.ts", "OrderRepository", "POST /orders"
 
      Q4:
        header: "Audience"
@@ -1039,12 +1063,26 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
                    [+ responsibilities[], source_files[] for "high" and "deep"]
                    [+ rationale, drill_rationale for "deep"]
                    drill: true|false }
+          description: 1–2 sentences covering (1) what this component does functionally,
+            (2) its primary responsibility in the system, (3) its key relationship to at
+            least one adjacent node. Must add meaning beyond the label.
+            ✗ Bad:  "The order service."
+            ✓ Good: "Processes customer orders from placement through fulfillment; owns the
+                     order lifecycle state machine and coordinates with Payment Service and
+                     Inventory Service."
         edges[]: { source, target, label
                    [+ description, protocol for "high" and "deep"] }
         drills[]: { nodeId, diagram_name, context, estimated_nodes, source_files[], vaxis_diagram_id: null, ir: null }
+          context: 1 sentence describing what a reader will find INSIDE this drill — not the
+            component's name again, but its contents.
+            ✗ Bad:  "The authentication system."
+            ✓ Good: "JWT session management, OAuth2 integrations (Google, GitHub), and the
+                     user permissions model."
       Populate according to depth_scope:
         "high"  → nodes: + responsibilities, source_files; edges: + description, protocol;
                   drills: one entry per major composite node (one level of drills only)
+                  Before writing: scan every node label and reject any that name a file, class,
+                  function, route, or config key — move those to drills[] instead.
         "deep"  → nodes: all fields including rationale; edges: all fields;
                   drills: ALL composite services recursively (leaf nodes get drill: false, no drills[] entry)
 
@@ -1052,21 +1090,32 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
       Run: vaxis diagrams plan .vaxis/<diagram-name>.ir.json
       Show the CLI output verbatim. Do NOT paraphrase the IR or expose raw JSON.
 
+      After showing the plan output, state your recommendation explicitly:
+      "Based on the project, I recommend [N] nodes and [M] drills.
+       [One sentence of rationale citing what you found in the code — e.g.:
+       'The codebase has 6 distinct service directories, 2 storage layers, and 1 external
+       integration — 9 nodes captures all natural boundaries without artificial clustering.']"
+
+      For depth_scope = "deep", also state the expected scale for the next level:
+      "Drilling into [M] composites will produce approximately [X] child diagrams at the next level."
+
    c. Use AskUserQuestion to get approval:
 
-      question: "Here is your diagram plan (shown above). How would you like to proceed?"
+      question: "I recommend [N] nodes and [M] drills for this diagram (plan shown above).
+                 Does this look right?"
       header: "Plan approval"
       options:
-        - label: "Approve"
-          description: "Proceed and create the Vaxis diagrams"
-        - label: "Change"
-          description: "I'll describe what to adjust — nodes, depth, names, drill targets"
+        - label: "Looks good — proceed"
+          description: "Create Vaxis diagrams with the recommended counts"
+        - label: "Adjust counts"
+          description: "I'll describe what to change — fewer/more nodes, which composites to drill or skip"
         - label: "Skip"
           description: "Abort; don't create any Vaxis resource"
 
-      If "Change": apply the user's adjustments to .vaxis/<name>.ir.json, re-run
-        `vaxis diagrams plan .vaxis/<name>.ir.json`, show updated output, then call
-        AskUserQuestion again. Loop until "Approve" or "Skip".
+      If "Adjust counts": apply the user's changes to .vaxis/<name>.ir.json, recount nodes
+        and drills, re-run `vaxis diagrams plan .vaxis/<name>.ir.json`, show updated output,
+        re-state the new counts and rationale ("Now [N'] nodes and [M'] drills — [updated reason]"),
+        then call AskUserQuestion again. Loop until "Looks good" or "Skip".
       If "Skip": abort; do not create any Vaxis resource.
 
 6c. LINT & AUTO-REPAIR — after compiling Mermaid from the IR and before every generate call:
@@ -1171,12 +1220,35 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
    drills[i].ir.drills[j].ir within the root IR file. Then repeat for great-grandchildren and so on.
    All nested IR data lives in the single .vaxis/<root-name>.ir.json file.
 
-   Continue until:
-   - No more drills[] entries appear in any nested IR (every component has reached leaf depth), OR
-   - The user says "that's enough depth" at any point.
+   ⚠  Do NOT stop after level 2 unless the nodes at the next level would all be atomic.
+   For a large codebase (20+ modules), expect 5–8 levels of hierarchy; stopping at 2 levels
+   with unexpanded composites is always wrong.
 
-   After completing each level, briefly report progress:
-   "Level [N] done — created [X] diagrams. Continuing to next level…"
+   Stopping criteria — stop drilling a branch only when ALL of the following apply:
+   - The node represents a single class, single file, or a single config value (true leaf).
+   - Generating a child diagram for it would produce fewer than 3 nodes.
+   - The remaining internals are entirely standard library / framework code with no project-specific logic.
+
+   Continue until: all drills[] entries at every level are empty, OR the user says "that's enough depth".
+
+   After each level completes and before expanding the next (Interactive and Hands-free modes only):
+   State the count for the upcoming level, then use AskUserQuestion:
+
+   "Level [N] done — [X] diagrams created. For level [N+1], I found [Y] composite nodes
+    with sub-structure; this will produce approximately [Y] more child diagrams."
+   (Optionally list the composite names if there are ≤8.)
+
+   header: "Level [N+1]"
+   question: "Ready to expand level [N+1]? (~[Y] new diagrams)"
+   options:
+     - label: "Continue"
+       description: "Expand all [Y] composites"
+     - label: "Select which to expand"
+       description: "I'll list the composites — you choose which ones to drill into"
+     - label: "Stop here"
+       description: "Keep the [N]-level hierarchy as-is; don't expand further"
+
+   In CI mode: skip this gate and always continue up to the stopping criteria.
 
 --- END DRILL EXPANSION LOOP ---
 
@@ -1188,6 +1260,10 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
       • Level 2 (children): <ComponentA>, <ComponentB>, ...
       • Level 3 (grandchildren): <SubComponentX>, ...
       …"
+    If depth_scope = "deep" and the final tree has ≤ 2 levels, emit a warning:
+    "⚠  Only [N] levels were created. If this codebase has deeper structure,
+    consider re-running with explicit focus areas or verify that all composite
+    nodes received drill markers."
 
 11. Give the user the direct diagram link for the root diagram (no share API call needed):
     https://app.vaxis.dev/diagram/<rootDiagramId>
