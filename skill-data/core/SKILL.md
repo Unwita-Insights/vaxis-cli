@@ -854,8 +854,8 @@ Subsequent WF19 runs for the same project:
 <project-root>/
   .vaxis/
     architecture-overview.ir.json     ← single root IR; child/grandchild data nested inside drills[].ir
-    architecture-overview.mmd         ← compiled root Mermaid (transient)
-    auth-service.mmd                  ← compiled child Mermaid (one .mmd per diagram, transient)
+    architecture-overview.mmd         ← temporary lint checkpoint; deleted after root generate (Step 7)
+    auth-service.mmd                  ← temporary lint checkpoint; deleted after each child generate (Step 8d)
 ```
 
 **Git: commit or gitignore?**
@@ -1086,6 +1086,14 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
         "deep"  → nodes: all fields including rationale; edges: all fields;
                   drills: ALL composite services recursively (leaf nodes get drill: false, no drills[] entry)
 
+   ⚠  MANDATORY — you MUST write the IR to disk before proceeding to Step 4.5b.
+      Generating the IR structure mentally and skipping the file write is not allowed.
+      After writing, the file `.vaxis/<diagram-name>.ir.json` MUST exist on disk.
+      If your environment does not support file writing, stop here and tell the user:
+        "I cannot write files in this environment. Run WF19 with an AI client that has
+         filesystem access (e.g. Claude Code CLI, Codex CLI)."
+      Do not proceed to Step 5 until the IR file has been confirmed written.
+
    b. Show the plan to the user:
       Run: vaxis diagrams plan .vaxis/<diagram-name>.ir.json
       Show the CLI output verbatim. Do NOT paraphrase the IR or expose raw JSON.
@@ -1119,16 +1127,19 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
       If "Skip": abort; do not create any Vaxis resource.
 
 6c. LINT & AUTO-REPAIR — after compiling Mermaid from the IR and before every generate call:
-    Write the compiled Mermaid to `.vaxis/<diagram-name>.mmd`, then:
+    Write the compiled Mermaid to `.vaxis/<diagram-name>.mmd` (temporary — deleted after generate), then:
       vaxis diagrams lint .vaxis/<diagram-name>.mmd --fix --json
 
     Parse the JSON response:
-    • `valid: true`  → proceed. The file now contains the final (possibly auto-repaired) Mermaid.
-    • `valid: false` → read `issues[]` where `severity: "error"`, fix each reported error,
+    • `valid: true`  → use `response.repaired` as the Mermaid for the --mermaid argument.
+    • `valid: false` → read `issues[]` where `severity: "error"`, fix each error in memory,
       rewrite `.vaxis/<diagram-name>.mmd`, and run lint again. Repeat until `valid: true`.
 
-    Use the file content (NOT the originally compiled string) for the `--mermaid` argument.
+    Always use `response.repaired` from the lint JSON (NOT the originally compiled string,
+    NOT by re-reading the file). The `repaired` field is always present — even when no repairs
+    were made it equals the original, so it is always safe to use.
     Do NOT call `diagrams generate` while `valid: false`.
+    After the generate call succeeds: delete `.vaxis/<diagram-name>.mmd`.
 
 5. Check for existing Vaxis resources before creating anything:
 
@@ -1168,9 +1179,18 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
    - Apply classDef coloring per authoring Rule 8
    - Run `vaxis diagrams format --json` if you need to reference the full authoring rule set.
 
-7. Generate root diagram:
-      vaxis diagrams generate <diagramId> --mermaid "<full mermaid>" --json
+7. Generate root diagram using `response.repaired` from Step 6c's lint call:
+      vaxis diagrams generate <diagramId> --mermaid "<response.repaired from Step 6c>" --json
    Save the list of child diagram IDs from drills[] in the response.
+   After this call succeeds: delete `.vaxis/<diagram-name>.mmd`.
+
+⚠  CRITICAL — child slots are EMPTY after Step 7:
+   The drills[] entries in the JSON response have content_status: "empty" and
+   current_mermaid: null on the server. The CLI creating these slots is NOT the same
+   as generating their diagram content. You MUST complete Step 8 for EVERY entry in
+   drills[] before moving to Step 10. Skipping Step 8 leaves diagrams blank in the UI.
+   There are NO exceptions — even in Hands-free or CI mode, every child slot must
+   receive a `vaxis diagrams generate <childId> --mermaid "..."` call.
 
 --- DRILL EXPANSION LOOP — runs whenever IR.drills[] is non-empty; recursion (Step 9) is "deep" only ---
 
@@ -1207,10 +1227,11 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
 
    d. If approved: compile child Mermaid from the child IR (same shape/edge/drill rules as Step 6),
       lint then generate:
-        Write the child Mermaid to `.vaxis/<child-name>.mmd`, run:
+        Write the child Mermaid to `.vaxis/<child-name>.mmd` (temporary), run:
           vaxis diagrams lint .vaxis/<child-name>.mmd --fix --json
-        Fix any errors and repeat lint until `valid: true`, then:
-          vaxis diagrams generate <childId> --mermaid "$(cat .vaxis/<child-name>.mmd)" --json
+        Fix any errors (rewrite file, run lint again) until `valid: true`, then:
+          vaxis diagrams generate <childId> --mermaid "<response.repaired from lint>" --json
+        After generate succeeds: delete `.vaxis/<child-name>.mmd`.
       Update the root IR: set drills[i].vaxis_diagram_id = childId, save to .vaxis/<root-name>.ir.json.
       Save any grandchild diagram IDs from the generate response.
 
@@ -1252,7 +1273,16 @@ Use when: "Generate a diagram for this project" / "Diagram my codebase" / "What 
 
 --- END DRILL EXPANSION LOOP ---
 
-10. Report the complete diagram tree:
+10. Verify all children have content, then report the complete diagram tree:
+
+    BEFORE reporting to the user, verify every child diagram has Mermaid content:
+    For each child diagram ID saved from Step 8:
+      vaxis diagrams show <childId> --json
+      Check that current_mermaid is non-null and non-empty.
+      If current_mermaid is null for any child → return to Step 8 for that child
+      immediately. Do NOT report completion with empty children.
+
+    Only after ALL children have non-null current_mermaid, run:
        vaxis diagrams tree <rootDiagramId> --json
     Summarise for the user:
     "Created [total] diagrams across [N] levels:

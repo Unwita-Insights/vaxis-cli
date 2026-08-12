@@ -697,7 +697,17 @@ async fn generate(
     };
 
     let status = resp.status().as_u16();
-    let result: serde_json::Value = resp.json().await.unwrap_or_default();
+    let result: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            if json {
+                println!("{}", serde_json::json!({"error": "parse_error", "message": format!("{}", e)}));
+            } else {
+                eprintln!("{} Server returned non-JSON response (HTTP {}): {}", "✗".red(), status, e);
+            }
+            std::process::exit(1);
+        }
+    };
 
     match status {
         401 => {
@@ -809,8 +819,12 @@ async fn generate(
 
     // Create child diagrams for every drill block the AI returned
     let mut created_drills: Vec<serde_json::Value> = Vec::new();
+    let mut failed_drills:  Vec<serde_json::Value> = Vec::new();
     for drill in &drills {
-        let node_id = drill["node_id"].as_str().unwrap_or("");
+        // Accept both snake_case and camelCase from the server.
+        let node_id = drill["node_id"].as_str()
+            .or_else(|| drill["nodeId"].as_str())
+            .unwrap_or("");
         if node_id.is_empty() { continue; }
 
         // Seed the child with the drill's Mermaid when the generate response
@@ -820,43 +834,103 @@ async fn generate(
             .and_then(|m| extract_node_label(m, node_id))
             .unwrap_or(node_id);
         let mut child_body = serde_json::json!({ "node_id": node_id, "node_label": node_label });
-        if let Some(seed) = drill["mermaid"].as_str() {
+        let has_seed = if let Some(seed) = drill["mermaid"].as_str() {
             if !seed.is_empty() {
                 child_body["seed_mermaid"] = serde_json::Value::String(seed.to_string());
-            }
-        }
+                true
+            } else { false }
+        } else { false };
 
-        if let Ok(cr) = client
+        match client
             .post(format!("{}/api/diagrams/{}/children", crate::config::base_url(), id))
             .header("Authorization", format!("Bearer {}", token))
             .json(&child_body)
             .send()
             .await
         {
-            let status = cr.status().as_u16();
-            if let Ok(child) = cr.json::<serde_json::Value>().await {
-                if status == 200 || status == 201 {
-                    created_drills.push(serde_json::json!({
-                        "node_id":    node_id,
-                        "diagram_id": child["id"].as_str().unwrap_or(""),
-                        "name":       child["name"].as_str().unwrap_or(node_id),
-                        "already_exists": child["already_exists"].as_bool().unwrap_or(false)
-                    }));
-                } else {
-                    eprintln!("  {} Failed to create child for '{}' (HTTP {}): {}",
-                        "⚠".yellow(), node_id, status,
-                        child["error"].as_str().unwrap_or("unknown error"));
+            Err(e) => {
+                let msg = format!("{}", e);
+                eprintln!("  {} Network error creating child for '{}': {}", "✗".red(), node_id, msg);
+                failed_drills.push(serde_json::json!({
+                    "node_id": node_id,
+                    "error":   "network_error",
+                    "message": msg,
+                }));
+            }
+            Ok(cr) => {
+                let child_status = cr.status().as_u16();
+                match cr.json::<serde_json::Value>().await {
+                    Err(e) => {
+                        let msg = format!("non-JSON response (HTTP {}): {}", child_status, e);
+                        eprintln!("  {} Failed to parse response for '{}': {}", "✗".red(), node_id, e);
+                        failed_drills.push(serde_json::json!({
+                            "node_id": node_id,
+                            "error":   "parse_error",
+                            "message": msg,
+                        }));
+                    }
+                    Ok(child) => {
+                        if child_status == 200 || child_status == 201 {
+                            // Prefer "id", fall back to "diagram_id" in case the backend varies.
+                            let diagram_id = child["id"].as_str()
+                                .or_else(|| child["diagram_id"].as_str())
+                                .unwrap_or("");
+                            // Determine actual content status: seeded if the backend echoes
+                            // current_mermaid back, or if we sent seed_mermaid and it was accepted.
+                            let content_status = if child["current_mermaid"].as_str()
+                                .filter(|s| !s.is_empty()).is_some()
+                            {
+                                "seeded"
+                            } else if has_seed && child["already_exists"].as_bool().unwrap_or(false) {
+                                // Already existed — may already have content; agent should verify.
+                                "existing"
+                            } else {
+                                "empty"
+                            };
+                            created_drills.push(serde_json::json!({
+                                "node_id":        node_id,
+                                "diagram_id":     diagram_id,
+                                "name":           child["name"].as_str().unwrap_or(node_id),
+                                "already_exists": child["already_exists"].as_bool().unwrap_or(false),
+                                "content_status": content_status,
+                            }));
+                        } else {
+                            let msg = child["error"]["message"].as_str()
+                                .or_else(|| child["error"].as_str())
+                                .or_else(|| child["message"].as_str())
+                                .unwrap_or("unknown error");
+                            eprintln!("  {} Failed to create child for '{}' (HTTP {}): {}",
+                                "✗".red(), node_id, child_status, msg);
+                            failed_drills.push(serde_json::json!({
+                                "node_id":     node_id,
+                                "error":       "server_error",
+                                "http_status": child_status,
+                                "message":     msg,
+                            }));
+                        }
+                    }
                 }
             }
         }
     }
 
+    // Drills that are truly empty (not seeded, not pre-existing) still need a generate call.
+    let empty_count = created_drills.iter()
+        .filter(|d| d["content_status"] == "empty")
+        .count();
+
     if json {
         let mut out = serde_json::json!({
             "diagram_id": id,
             "mermaid":    mermaid,
-            "drills":     created_drills
+            "drills":     created_drills,
         });
+        if empty_count > 0 {
+            out["drills_require_content"] = serde_json::Value::Bool(true);
+        }
+        if !failed_drills.is_empty() {
+            out["failed_drills"] = serde_json::Value::Array(failed_drills.clone());
+        }
         if let Some(s) = chat_session_id { out["chat_session_id"] = serde_json::Value::String(s.to_string()); }
         // A real edit can still ship an advisory notice (e.g. truncation). Keep it.
         if let Some(n) = notice { out["notice"] = serde_json::Value::String(n.to_string()); }
@@ -870,17 +944,43 @@ async fn generate(
     }
 
     if !created_drills.is_empty() {
-        println!(
-            "\n{} {} child diagram{} created:",
-            "✓".green().bold(),
-            created_drills.len(),
-            if created_drills.len() == 1 { "" } else { "s" }
-        );
-        for d in &created_drills {
-            let node = d["node_id"].as_str().unwrap_or("").yellow();
-            let cid  = d["diagram_id"].as_str().unwrap_or("").dimmed();
-            println!("    {} → {}", node, cid);
+        let empty_slots: Vec<_> = created_drills.iter()
+            .filter(|d| d["content_status"] == "empty")
+            .collect();
+        if !empty_slots.is_empty() {
+            println!(
+                "\n{} {} child diagram slot{} created (content is empty — Mermaid must be generated for each):",
+                "⚠".yellow(),
+                empty_slots.len(),
+                if empty_slots.len() == 1 { "" } else { "s" }
+            );
+            for d in &empty_slots {
+                let node = d["node_id"].as_str().unwrap_or("").yellow();
+                let cid  = d["diagram_id"].as_str().unwrap_or("").dimmed();
+                println!("    {} → {}", node, cid);
+            }
+            println!("  Next: call `vaxis diagrams generate <childId> --mermaid '...'` for each child above.");
         }
+        let seeded_count = created_drills.iter().filter(|d| d["content_status"] == "seeded").count();
+        if seeded_count > 0 {
+            println!("\n{} {} child diagram{} pre-populated with seeded content.",
+                "✓".green(), seeded_count, if seeded_count == 1 { "" } else { "s" });
+        }
+    }
+
+    if !failed_drills.is_empty() {
+        println!(
+            "\n{} {} child diagram slot{} FAILED to create:",
+            "✗".red(),
+            failed_drills.len(),
+            if failed_drills.len() == 1 { "" } else { "s" }
+        );
+        for d in &failed_drills {
+            println!("    {} — {}",
+                d["node_id"].as_str().unwrap_or("").red(),
+                d["message"].as_str().unwrap_or("unknown error").dimmed());
+        }
+        println!("  Retry: re-run `vaxis diagrams generate {} --mermaid '...'` with corrected Mermaid.", id);
     }
 
     // The edit went through but the server flagged something (usually truncation).
@@ -894,12 +994,23 @@ fn extract_node_label<'a>(mermaid: &'a str, node_id: &str) -> Option<&'a str> {
         let trimmed = line.trim_start();
         if let Some(rest) = trimmed.strip_prefix(node_id) {
             let rest = rest.trim_start();
-            if rest.starts_with('[') || rest.starts_with("[(") {
-                let inner = rest.trim_start_matches('[').trim_start_matches('(');
-                let label = inner.split(|c| c == ']' || c == ')').next()?;
-                let label = label.trim().trim_matches('"');
-                if !label.is_empty() { return Some(label); }
-            }
+            // Handle all common Mermaid node shapes:
+            //   ["label"]   rectangle       [("label")]  cylinder
+            //   {"label"}   rhombus         {{"label"}}  hexagon
+            //   (("label")) stadium         (["label"])  subroutine
+            let (inner, closing): (&str, char) = if rest.starts_with('[') {
+                // strip all leading '[' and '(' for [(..)] and [(..)], close on ']' or ')'
+                (rest.trim_start_matches('[').trim_start_matches('('), ']')
+            } else if rest.starts_with('{') {
+                (rest.trim_start_matches('{'), '}')
+            } else if rest.starts_with('(') {
+                (rest.trim_start_matches('('), ')')
+            } else {
+                continue;
+            };
+            let label = inner.split(closing).next()?;
+            let label = label.trim().trim_matches('"');
+            if !label.is_empty() { return Some(label); }
         }
     }
     None
