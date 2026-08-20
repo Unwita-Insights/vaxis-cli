@@ -83,6 +83,10 @@ skills/vaxis/SKILL.md          # small discovery skill installed into agent host
 skill-data/core/SKILL.md       # authoritative instructions embedded in the binary
 ```
 
+`src/commands/sync.rs` owns Architecture-as-Code repository synchronization: the versioned
+`vaxis.yaml` manifest, complete drill-tree export, drift classification, CI checks, and
+conflict-safe pull behavior.
+
 - **Flat command pattern.** `main.rs` matches the `Commands` enum and calls one `run()` per
   module. No central router, service layer, or DI.
 - **`--json` is a global flag** (`cli.rs`), threaded as a `bool` into every command. Each
@@ -143,6 +147,35 @@ skill-data/core/SKILL.md       # authoritative instructions embedded in the bina
 - **Skill distribution** also makes no network call. `vaxis skills get core` prints the
   embedded authoritative skill exactly; `vaxis install --skills` installs the small discovery
   skill using canonical host path mappings, checksum-managed upgrades, and backup-on-force.
+- **Architecture version control** is exposed as `diagrams sync init|status|pull`.
+  `init` must run inside a Git repository and writes `architecture.vaxis.mmd` plus
+  `vaxis.yaml`. The single portable Mermaid contains the complete recursive drill tree;
+  `status --check` exits 2 on drift and `pull` never overwrites a local/remote conflict.
+  Only after successfully saving an architecture with `diagrams generate` or `diagrams import`,
+  agents must first print the direct `<configured-host>/diagram/<rootId>` open link (including
+  localhost/custom hosts), then
+  agents should use their structured question tool to ask once whether the user wants Git
+  version control for that completed diagram tree. Do not offer automatically for arbitrary
+  legacy diagrams. Before a non-dry-run pull,
+  preview changes and ask again before modifying repository files. The CLI's `--json` output
+  mode does not bypass these consent gates in an interactive AI session. A Yes authorizes creation of
+  `architecture/` files only—not `git add`, commit, or push. Show those Git commands as next
+  steps using the actual sync directory and require separate explicit authorization before
+  executing Git writes. Use `git status` for untracked files and `git diff --cached` only
+  after the user explicitly authorizes staging.
+- **Portable export has two authoritative sources.** Reviewed diagrams serialize live
+  `scene_json`; unopened CLI/import diagrams use `current_mermaid` plus `child_nodes`. Both
+  flows produce the same one-file drill transport and must not emit empty child placeholders.
+- **Do not add `diagrams sync push` yet.** The backend does not enforce an expected content
+  revision, so a client-only read-before-write check still has a lost-update race. Push must
+  wait for backend optimistic-concurrency support.
+- **Historical Git rendering is planned, not shipped.** The reserved design is
+  `diagrams sync render --ref <git-ref>`, creating a separate Vaxis snapshot tree with new
+  IDs. v0.5.14 must not invoke or advertise that command as available; a single old `.mmd`
+  portable file can be rendered with `diagrams import --file`, including its complete drill
+  hierarchy when imported into a newly created empty target; the API rejects portable restores
+  over targets with content or drill children. Automatic creation from a Git ref still needs
+  implementation.
 
 ## Backend API surface the CLI depends on (the contract)
 
@@ -180,6 +213,7 @@ Endpoints the CLI is coupled to (backend's CURRENT paths):
   `diagrams ask` and returns an `answer` field),
   `POST /api/diagrams/{id}/children`, `POST /api/diagrams/{id}/import`,
   `GET /api/diagrams/{id}/tree`,
+  `GET /api/diagrams/{id}/export/mermaid`,
   `GET|POST /api/diagrams/{id}/chat/sessions` (sessions list/create),
   `PATCH /api/diagrams/{id}/chat/sessions/{sid}` (session rename),
   `DELETE /api/diagrams/{id}/chat/messages/last` (undo).

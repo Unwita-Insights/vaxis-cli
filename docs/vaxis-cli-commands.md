@@ -74,6 +74,9 @@ project and global scope.
 | `vaxis diagrams evaluate --captures <file> [--output <file>] --json` | Evaluate recorded direct/native Mermaid outputs against the parity catalog. |
 | `vaxis diagrams import <id> --mermaid <source> --json` | Save raw Mermaid directly without calling AI. |
 | `vaxis diagrams lint <file> [--fix] [--json]` | Validate (and optionally auto-repair) a Mermaid file before sending to Vaxis. Exits 0 if valid, 1 if errors remain. `--fix` rewrites the file in-place with auto-repaired content (ignored for stdin). |
+| `vaxis diagrams sync init <rootId> [--dir architecture] [--json]` | Export the complete recursive drill tree as one `architecture.vaxis.mmd` plus `vaxis.yaml`. Refuses to overwrite either target. |
+| `vaxis diagrams sync status [--dir architecture] [--check] [--json]` | Compare linked local files with their remote Vaxis diagrams and classify drift. Read-only; `--check` exits 2 unless all diagrams are in sync. |
+| `vaxis diagrams sync pull [--dir architecture] [--dry-run] [--json]` | Pull a non-conflicting complete remote tree, including drill additions or removals. Refuses conflicts and unavailable or invalid Mermaid. |
 
 ### Generate options
 

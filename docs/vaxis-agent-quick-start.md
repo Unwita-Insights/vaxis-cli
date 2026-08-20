@@ -120,5 +120,16 @@ Keep the codebase and Vaxis diagrams synchronized:
   provide the updated Vaxis link.
 ```
 
+When no sync manifest exists, the assistant should offer repository version control once
+after creating a meaningful architecture and wait for explicit consent. Acceptance runs
+`vaxis diagrams sync init <rootId>` to create `architecture/vaxis.yaml` and one portable
+`architecture/architecture.vaxis.mmd` containing every drill;
+it does not create a Git commit or push to GitHub. Existing linked repositories use
+`sync status` and preview with `sync pull --dry-run`; an interactive assistant must ask
+before applying `sync pull`, even when its CLI call uses `--json`.
+
+After every successful generate/import, always show the direct diagram link using the
+configured host and root diagram ID before offering version control.
+
 This makes architecture maintenance part of normal development instead of a
 separate documentation task.

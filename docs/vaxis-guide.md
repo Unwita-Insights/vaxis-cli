@@ -157,6 +157,14 @@ Keep the codebase and Vaxis diagrams synchronised:
   provide the updated Vaxis link.
 ```
 
+After creating a meaningful architecture in a Git repository, the assistant should offer
+to version it once and wait for consent. If accepted, `vaxis diagrams sync init <rootId>`
+creates `architecture/vaxis.yaml` and one portable `architecture.vaxis.mmd` for the complete drill tree. Use `sync status`
+to inspect drift and `sync pull --dry-run` before bringing remote-only changes into Git.
+An interactive assistant must ask before applying a non-dry-run pull; `--json` does not
+bypass that repository-write consent.
+Initialization never commits or pushes Git changes.
+
 ---
 
 ## Step 7 — Upgrade Vaxis CLI

@@ -192,11 +192,35 @@ OR interactive: `vaxis apps update` → picker → inline edit fields
 
 ---
 
-### UC-23 · Import Mermaid from a file (future capability)
+### UC-23 · Import Mermaid from a file
 **Scenario:** User has a `.mmd` file and wants to import it.
-**Trigger:** Not currently supported; no `--file` flag on `import`.
-**Expected behavior (desired):** `vaxis diagrams import <diagramId> --file ./architecture.mmd --json`
+**Trigger:** `vaxis diagrams import <diagramId> --file ./architecture.mmd --json`
+**Expected behavior:** File content is saved directly without invoking AI.
 **Edge cases:** File encoding, line endings, BOM characters must be handled. Large files (>50 nodes) should warn about limits.
+
+---
+
+### UC-23A · Initialize architecture version control
+**Scenario:** A user wants the complete Vaxis architecture reviewed and versioned with application code.
+**Trigger:** `vaxis diagrams sync init <rootDiagramId> --dir architecture --json`
+**Expected behavior:** Inside a Git repository, export the root and every drill child into one portable `architecture.vaxis.mmd` and create `vaxis.yaml` without committing Git changes.
+**Edge cases:** Existing targets, unsafe paths, invalid portable content, reviewed canvas scenes, and unopened generated Mermaid must be handled before repository files are replaced.
+
+---
+
+### UC-23B · Detect architecture drift
+**Scenario:** A developer or CI job needs to compare repository files with Vaxis.
+**Trigger:** `vaxis diagrams sync status [--check] --json`
+**Expected behavior:** Classify in-sync, local, remote, conflicting, added, deleted, invalid, and unavailable diagrams. `--check` exits 2 unless every diagram is in sync.
+**Edge cases:** Status is read-only and must not refresh hashes or modify files.
+
+---
+
+### UC-23C · Pull remote architecture safely
+**Scenario:** Vaxis was edited in the web app and the reviewed repository copy needs updating.
+**Trigger:** `vaxis diagrams sync pull [--dry-run] --json`
+**Expected behavior:** Pull remote-only changes, add new drill children, refresh converged hashes, and use backup/rollback writes.
+**Edge cases:** Conflicts, invalid local Mermaid, and unavailable remote source fail without overwriting local files. Because the portable file is one complete tree, a confirmed pull applies remote drill additions and removals together. Revision-safe push is not available yet.
 
 ---
 

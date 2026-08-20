@@ -136,6 +136,7 @@ pub async fn run(action: DiagramsAction, json: bool) {
     };
 
     match action {
+        DiagramsAction::Sync { action }           => crate::commands::sync::run(&token, action, json).await,
         DiagramsAction::List { app_id }           => list(&token, &app_id, json).await,
         DiagramsAction::Create { app_id, name }   => create(&token, &app_id, &name, json).await,
         DiagramsAction::Generate {
@@ -852,10 +853,12 @@ async fn generate(
     }
 
     if json {
+        let open_url = format!("{}/diagram/{}", crate::config::base_url(), id);
         let mut out = serde_json::json!({
             "diagram_id": id,
             "mermaid":    mermaid,
-            "drills":     created_drills
+            "drills":     created_drills,
+            "open_url":   open_url
         });
         if let Some(s) = chat_session_id { out["chat_session_id"] = serde_json::Value::String(s.to_string()); }
         // A real edit can still ship an advisory notice (e.g. truncation). Keep it.
@@ -868,6 +871,7 @@ async fn generate(
     for line in mermaid.lines() {
         println!("  {}", line);
     }
+    println!("\n{} {}/diagram/{}", "Open:".cyan().bold(), crate::config::base_url(), id);
 
     if !created_drills.is_empty() {
         println!(
@@ -2137,10 +2141,14 @@ async fn import_cmd(token: &str, id: &str, mermaid: &str, json: bool) {
             std::process::exit(1);
         }
         200 => {
+            let result = resp.json::<serde_json::Value>().await.unwrap_or_default();
+            let drill_count = result["drill_count"].as_u64().unwrap_or(0);
+            let open_url = format!("{}/diagram/{}", crate::config::base_url(), id);
             if json {
-                println!("{}", serde_json::json!({"ok": true, "diagram_id": id}));
+                println!("{}", serde_json::json!({"ok": true, "diagram_id": id, "drill_count": drill_count, "open_url": open_url}));
             } else {
                 println!("{} Mermaid imported to {}", "✓".green().bold(), id.dimmed());
+                println!("{} {}", "Open:".cyan().bold(), open_url);
             }
         }
         s => {
