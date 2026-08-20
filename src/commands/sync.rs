@@ -1,8 +1,12 @@
 use crate::cli::SyncAction;
+use cap_std::ambient_authority;
+use cap_std::fs::{Dir, OpenOptions as CapOpenOptions};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs;
+#[cfg(test)]
 use std::fs::OpenOptions;
 use std::io::{ErrorKind, Write};
 use std::path::{Component, Path, PathBuf};
@@ -10,6 +14,9 @@ use std::path::{Component, Path, PathBuf};
 const MANIFEST_FILE: &str = "vaxis.yaml";
 const ARCHITECTURE_FILE: &str = "architecture.vaxis.mmd";
 const SCHEMA_VERSION: u32 = 2;
+const MAX_PORTABLE_MERMAID_BYTES: usize = 512_000;
+const MAX_PORTABLE_DIAGRAMS: usize = 256;
+const MAX_EXPORT_RESPONSE_BYTES: usize = 2_000_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Manifest {
@@ -60,10 +67,8 @@ pub async fn run(token: &str, action: SyncAction, json: bool) {
 async fn init(token: &str, root_id: &str, dir: &Path, json: bool) -> Result<(), (&'static str, String)> {
     ensure_git_repository()?;
     validate_sync_dir(dir)?;
-    validate_sync_root_containment(dir)?;
     let manifest_path = dir.join(MANIFEST_FILE);
     let architecture_path = dir.join(ARCHITECTURE_FILE);
-    refuse_existing_targets(&[&manifest_path, &architecture_path])?;
 
     let remote = fetch_export(token, root_id).await?;
     if let Err((_, message)) = validate_remote_root(root_id, &remote) {
@@ -81,9 +86,13 @@ async fn init(token: &str, root_id: &str, dir: &Path, json: bool) -> Result<(), 
     let yaml = serde_yaml::to_string(&manifest).map_err(|e| ("manifest_invalid", e.to_string()))?;
     // Re-check after the network request so a swapped directory symlink cannot
     // redirect the delayed write outside the repository.
-    validate_sync_root_containment(dir)?;
-    refuse_existing_targets(&[&manifest_path, &architecture_path])?;
-    atomic_write_all(&[(architecture_path.clone(), source), (manifest_path.clone(), yaml)])?;
+    let anchor = open_sync_anchor(dir, true)?;
+    refuse_existing_targets_anchored(&anchor, &[Path::new(MANIFEST_FILE), Path::new(ARCHITECTURE_FILE)])?;
+    atomic_write_all_anchored(
+        &anchor,
+        &[(PathBuf::from(ARCHITECTURE_FILE), source), (PathBuf::from(MANIFEST_FILE), yaml)],
+        &[(PathBuf::from(ARCHITECTURE_FILE), None), (PathBuf::from(MANIFEST_FILE), None)],
+    )?;
 
     if json {
         println!("{}", serde_json::json!({"ok":true,"root_diagram_id":remote.root_id,"diagram_count":remote.diagram_count,"manifest":manifest_path,"file":architecture_path}));
@@ -129,12 +138,14 @@ async fn status(token: &str, dir: &Path, check: bool, json: bool) -> Result<Stat
 }
 
 async fn pull(token: &str, dir: &Path, dry_run: bool, json: bool) -> Result<(), (&'static str, String)> {
-    let (manifest_path, mut manifest, manifest_source) = load_manifest(dir)?;
-    let file = safe_join(dir, Path::new(&manifest.file))?;
+    let anchor = open_sync_anchor(dir, false)?;
+    let (_, mut manifest, manifest_source) = load_manifest_anchored(&anchor, dir)?;
+    let file_relative = validate_relative_file(Path::new(&manifest.file))?;
+    let file = dir.join(&file_relative);
     let remote = fetch_export(token, &manifest.root_diagram_id).await?;
     validate_remote_root(&manifest.root_diagram_id, &remote)?;
     validate_portable_mermaid(&remote.mermaid)?;
-    let (local, local_source) = match fs::read(&file) {
+    let (local, local_source) = match read_anchored(&anchor, &file_relative) {
         Ok(bytes) => {
             let value = String::from_utf8(bytes.clone())
                 .map_err(|error| ("invalid_local", format!("cannot read {}: {error}", file.display())))?;
@@ -155,11 +166,10 @@ async fn pull(token: &str, dir: &Path, dry_run: bool, json: bool) -> Result<(), 
         manifest.synced_hash = content_hash(&source);
         manifest.remote_revision = remote.revision;
         let yaml = serde_yaml::to_string(&manifest).map_err(|e| ("manifest_invalid", e.to_string()))?;
-        validate_sync_root_containment(dir)?;
-        let file = safe_join(dir, Path::new(&manifest.file))?;
-        atomic_write_all_checked(
-            &[(file.clone(), source), (manifest_path.clone(), yaml)],
-            &[(file.clone(), local_source), (manifest_path, Some(manifest_source))],
+        atomic_write_all_anchored(
+            &anchor,
+            &[(file_relative.clone(), source), (PathBuf::from(MANIFEST_FILE), yaml)],
+            &[(file_relative, local_source), (PathBuf::from(MANIFEST_FILE), Some(manifest_source))],
         )?;
     }
     if json { println!("{}", serde_json::json!({"ok":true,"dry_run":dry_run,"updated":changed,"file":file})); }
@@ -170,13 +180,35 @@ async fn pull(token: &str, dir: &Path, dry_run: bool, json: bool) -> Result<(), 
 }
 
 async fn fetch_export(token: &str, root_id: &str) -> Result<PortableExport, (&'static str, String)> {
-    let response = reqwest::Client::new()
+    let mut response = reqwest::Client::new()
         .get(format!("{}/api/diagrams/{root_id}/export/mermaid", crate::config::base_url()))
         .bearer_auth(token).send().await.map_err(|e| ("network_error", e.to_string()))?;
     if response.status() == reqwest::StatusCode::NOT_FOUND { return Err(("remote_diagram_missing", format!("diagram {root_id} was not found"))); }
     if response.status() == reqwest::StatusCode::UNAUTHORIZED { return Err(("session_expired", "session expired; run vaxis login again".to_string())); }
     if !response.status().is_success() { return Err(("remote_error", format!("portable export request returned {}", response.status()))); }
-    response.json().await.map_err(|e| ("parse_error", e.to_string()))
+    if response.content_length().is_some_and(|length| length > MAX_EXPORT_RESPONSE_BYTES as u64) {
+        return Err(("remote_export_too_large", format!("portable export response exceeds {MAX_EXPORT_RESPONSE_BYTES} bytes")));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| ("network_error", error.to_string()))? {
+        if body.len().saturating_add(chunk.len()) > MAX_EXPORT_RESPONSE_BYTES {
+            return Err(("remote_export_too_large", format!("portable export response exceeds {MAX_EXPORT_RESPONSE_BYTES} bytes")));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let export: PortableExport = serde_json::from_slice(&body).map_err(|error| ("parse_error", error.to_string()))?;
+    validate_export_limits(&export)?;
+    Ok(export)
+}
+
+fn validate_export_limits(export: &PortableExport) -> Result<(), (&'static str, String)> {
+    if export.diagram_count == 0 || export.diagram_count > MAX_PORTABLE_DIAGRAMS {
+        return Err(("remote_export_invalid", format!("portable export diagram count must be between 1 and {MAX_PORTABLE_DIAGRAMS}")));
+    }
+    if export.mermaid.len() > MAX_PORTABLE_MERMAID_BYTES {
+        return Err(("remote_export_too_large", format!("portable Mermaid exceeds {MAX_PORTABLE_MERMAID_BYTES} bytes")));
+    }
+    Ok(())
 }
 
 fn validate_portable_mermaid(value: &str) -> Result<(), (&'static str, String)> {
@@ -184,15 +216,17 @@ fn validate_portable_mermaid(value: &str) -> Result<(), (&'static str, String)> 
     if trimmed.is_empty() { return Err(("mermaid_unavailable", "portable Mermaid export is empty".to_string())); }
     let lines: Vec<&str> = trimmed.lines().collect();
     let first_drill = lines.iter().position(|line| line.starts_with("%% vaxis:drill ")).unwrap_or(lines.len());
-    validate_diagram_level(&lines[..first_drill].join("\n"), first_drill < lines.len())?;
+    let root_level = lines[..first_drill].join("\n");
+    validate_diagram_level(&root_level, first_drill < lines.len())?;
+    let mut levels = HashMap::from([(String::new(), root_level)]);
 
     let mut index = first_drill;
     while index < lines.len() {
         let marker = lines[index].strip_prefix("%% vaxis:drill ")
             .filter(|node_id| !node_id.is_empty() && node_id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'));
-        if marker.is_none() {
+        let Some(marker) = marker else {
             return Err(("mermaid_not_renderable", format!("unexpected portable content at line {}", index + 1)));
-        }
+        };
         index += 1;
         let mut payload = Vec::new();
         while index < lines.len() && lines[index].starts_with("%% vaxis:drill-line") {
@@ -202,10 +236,38 @@ fn validate_portable_mermaid(value: &str) -> Result<(), (&'static str, String)> 
         if payload.is_empty() {
             return Err(("mermaid_not_renderable", "drill marker has no encoded payload".to_string()));
         }
-        validate_diagram_level(&payload.join("\n"), true)?;
+        let payload = payload.join("\n");
+        validate_diagram_level(&payload, true)?;
+        let explicit_path = payload.lines().find_map(|line| line.trim().strip_prefix("%% vaxis:path "));
+        let parent = if let Some(path) = explicit_path {
+            let (parent_path, final_node) = path.rsplit_once('/').unwrap_or(("", path));
+            if final_node != marker {
+                return Err(("mermaid_not_renderable", format!("drill path {path} does not end with node {marker}")));
+            }
+            levels.get(parent_path).ok_or_else(|| (
+                "mermaid_not_renderable",
+                format!("drill path {path} references a parent level that does not exist"),
+            ))?
+        } else {
+            levels.values().find(|level| portable_level_contains_node(level, marker))
+                .ok_or_else(|| ("mermaid_not_renderable", format!("drill marker references missing parent node: {marker}")))?
+        };
+        if !portable_level_contains_node(parent, marker) {
+            return Err(("mermaid_not_renderable", format!("drill marker references missing parent node: {marker}")));
+        }
+        if let Some(path) = explicit_path { levels.insert(path.to_string(), payload); }
+        else { levels.insert(format!("legacy-{index}-{marker}"), payload); }
         while index < lines.len() && lines[index].trim().is_empty() { index += 1; }
     }
     Ok(())
+}
+
+fn portable_level_contains_node(level: &str, node_id: &str) -> bool {
+    let diagram_only = level.lines()
+        .filter(|line| !line.trim_start().starts_with("%%"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    crate::mermaid_lint::contains_node_reference(&diagram_only, node_id)
 }
 
 fn validate_diagram_level(value: &str, require_flowchart: bool) -> Result<(), (&'static str, String)> {
@@ -223,6 +285,9 @@ fn validate_diagram_level(value: &str, require_flowchart: bool) -> Result<(), (&
         return Err(("mermaid_not_renderable", "diagram level has no supported Mermaid header".to_string()));
     }
     let report = crate::mermaid_lint::lint(value);
+    if let Some(issue) = report.fixed().next() {
+        return Err(("mermaid_not_renderable", format!("portable Mermaid requires repair: {}", issue.message)));
+    }
     if let Some(issue) = report.errors().next() {
         let location = issue.line.map(|line| format!(" at line {line}")).unwrap_or_default();
         return Err(("mermaid_not_renderable", format!("{}{location}", issue.message)));
@@ -255,9 +320,72 @@ fn load_manifest(dir: &Path) -> Result<(PathBuf, Manifest, Vec<u8>), (&'static s
     Ok((path, manifest, source))
 }
 
-fn refuse_existing_targets(paths: &[&Path]) -> Result<(), (&'static str, String)> {
+fn load_manifest_anchored(anchor: &Dir, dir: &Path) -> Result<(PathBuf, Manifest, Vec<u8>), (&'static str, String)> {
+    let source = read_anchored(anchor, Path::new(MANIFEST_FILE)).map_err(|error| {
+        if error.kind() == ErrorKind::NotFound {
+            ("manifest_not_found", format!("{} was not found", dir.join(MANIFEST_FILE).display()))
+        } else {
+            ("manifest_invalid", error.to_string())
+        }
+    })?;
+    let text = String::from_utf8(source.clone()).map_err(|error| ("manifest_invalid", error.to_string()))?;
+    let manifest: Manifest = serde_yaml::from_str(&text).map_err(|error| ("manifest_invalid", error.to_string()))?;
+    if manifest.schema_version != SCHEMA_VERSION || manifest.root_diagram_id.trim().is_empty() || manifest.synced_hash.trim().is_empty() {
+        return Err(("manifest_invalid", "manifest has unsupported schema or empty required fields".to_string()));
+    }
+    validate_relative_file(Path::new(&manifest.file))?;
+    Ok((dir.join(MANIFEST_FILE), manifest, source))
+}
+
+fn validate_relative_file(path: &Path) -> Result<PathBuf, (&'static str, String)> {
+    if path.as_os_str().is_empty() || path.is_absolute() || path.components().any(|component| {
+        matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
+    }) {
+        return Err(("manifest_invalid", format!("unsafe repository path {}", path.display())));
+    }
+    Ok(path.to_path_buf())
+}
+
+fn repository_root() -> Result<PathBuf, (&'static str, String)> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .map_err(|error| ("git_unavailable", error.to_string()))?;
+    if !output.status.success() {
+        return Err(("repository_not_found", "sync must run inside a Git repository".to_string()));
+    }
+    PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()).canonicalize()
+        .map_err(|error| ("repository_not_found", error.to_string()))
+}
+
+fn open_sync_anchor(dir: &Path, create: bool) -> Result<Dir, (&'static str, String)> {
+    validate_sync_dir(dir)?;
+    let repository = repository_root()?;
+    let cwd = std::env::current_dir().map_err(|error| ("invalid_sync_directory", error.to_string()))?
+        .canonicalize().map_err(|error| ("invalid_sync_directory", error.to_string()))?;
+    let cwd_relative = cwd.strip_prefix(&repository)
+        .map_err(|_| ("invalid_sync_directory", "current directory is outside the Git repository".to_string()))?;
+    let relative = cwd_relative.join(dir);
+    let repository_dir = Dir::open_ambient_dir(&repository, ambient_authority())
+        .map_err(|error| ("invalid_sync_directory", error.to_string()))?;
+    if create {
+        repository_dir.create_dir_all(&relative)
+            .map_err(|error| ("write_failed", error.to_string()))?;
+    }
+    repository_dir.open_dir(&relative)
+        .map_err(|error| ("invalid_sync_directory", format!("cannot open sync directory {}: {error}", dir.display())))
+}
+
+fn read_anchored(anchor: &Dir, path: &Path) -> std::io::Result<Vec<u8>> {
+    let mut file = anchor.open(path)?;
+    let mut content = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut content)?;
+    Ok(content)
+}
+
+fn refuse_existing_targets_anchored(anchor: &Dir, paths: &[&Path]) -> Result<(), (&'static str, String)> {
     for path in paths {
-        match fs::symlink_metadata(path) {
+        match anchor.symlink_metadata(path) {
             Ok(_) => return Err(("target_exists", format!("{} already exists", path.display()))),
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => return Err(("target_check_failed", format!("cannot inspect {}: {error}", path.display()))),
@@ -330,10 +458,99 @@ fn classify(base: &str, local: &str, remote: &str) -> SyncState {
     match (local_changed, remote_changed) { (false,false)=>SyncState::InSync, (true,false)=>SyncState::LocalChanged, (false,true)=>SyncState::RemoteChanged, (true,true) if content_hash(local)==content_hash(remote)=>SyncState::RemoteChanged, (true,true)=>SyncState::Conflict }
 }
 
+fn atomic_write_all_anchored(
+    anchor: &Dir,
+    writes: &[(PathBuf, String)],
+    expected: &[(PathBuf, Option<Vec<u8>>)],
+) -> Result<(), (&'static str, String)> {
+    let mut staged: Vec<(PathBuf, PathBuf, Option<PathBuf>)> = Vec::new();
+    for (index, (path, content)) in writes.iter().enumerate() {
+        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            anchor.create_dir_all(parent).map_err(|error| ("write_failed", error.to_string()))?;
+        }
+        let mut temporary = None;
+        for attempt in 0..1000u32 {
+            let candidate = path.with_extension(format!("vaxis-tmp-{}-{index}-{attempt}", std::process::id()));
+            let mut options = CapOpenOptions::new();
+            options.write(true).create_new(true);
+            match anchor.open_with(&candidate, &options) {
+                Ok(mut file) => {
+                    file.write_all(content.as_bytes()).and_then(|_| file.sync_all())
+                        .map_err(|error| ("write_failed", error.to_string()))?;
+                    temporary = Some(candidate);
+                    break;
+                }
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(("write_failed", error.to_string())),
+            }
+        }
+        let temporary = temporary.ok_or_else(|| ("write_failed", format!("cannot stage {}", path.display())))?;
+        let backup = match anchor.symlink_metadata(path) {
+            Ok(_) => Some(path.with_extension(format!("vaxis-bak-{}-{index}", std::process::id()))),
+            Err(error) if error.kind() == ErrorKind::NotFound => None,
+            Err(error) => return Err(("write_failed", error.to_string())),
+        };
+        staged.push((temporary, path.clone(), backup));
+    }
+
+    let mut installed = 0usize;
+    for (temporary, path, backup) in &staged {
+        let expected_content = expected.iter().find(|(expected_path, _)| expected_path == path)
+            .map(|(_, content)| content)
+            .ok_or_else(|| ("write_failed", format!("missing expected snapshot for {}", path.display())))?;
+        let result = (|| -> std::io::Result<()> {
+            if let Some(backup) = backup {
+                anchor.rename(path, anchor, backup)?;
+                if expected_content.as_ref() != Some(&read_anchored(anchor, backup)?) {
+                    return Err(std::io::Error::new(ErrorKind::WouldBlock, "destination changed during write"));
+                }
+            } else {
+                match anchor.symlink_metadata(path) {
+                    Ok(_) => return Err(std::io::Error::new(ErrorKind::WouldBlock, "destination appeared during write")),
+                    Err(error) if error.kind() == ErrorKind::NotFound && expected_content.is_none() => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            anchor.rename(temporary, anchor, path)?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let mut restoration_failures = Vec::new();
+            if let Some(backup) = backup {
+                if anchor.symlink_metadata(path).is_ok() { let _ = anchor.remove_file(path); }
+                if anchor.rename(backup, anchor, path).is_err() {
+                    restoration_failures.push(path.display().to_string());
+                }
+            }
+            for (_, applied, applied_backup) in staged[..installed].iter().rev() {
+                if anchor.symlink_metadata(applied).is_ok() { let _ = anchor.remove_file(applied); }
+                if let Some(applied_backup) = applied_backup {
+                    if anchor.rename(applied_backup, anchor, applied).is_err() {
+                        restoration_failures.push(applied.display().to_string());
+                    }
+                }
+            }
+            for (temporary, _, _) in &staged { let _ = anchor.remove_file(temporary); }
+            if restoration_failures.is_empty() {
+                let code = if error.kind() == ErrorKind::WouldBlock { "local_changed_during_write" } else { "write_failed" };
+                return Err((code, format!("{error}; original files restored")));
+            }
+            return Err(("restoration_incomplete", format!("{error}; could not restore: {}", restoration_failures.join(", "))));
+        }
+        installed += 1;
+    }
+    for (_, _, backup) in &staged {
+        if let Some(backup) = backup { let _ = anchor.remove_file(backup); }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn atomic_write_all(writes: &[(PathBuf, String)]) -> Result<(), (&'static str, String)> {
     atomic_write_all_impl(writes, None, None)
 }
 
+#[cfg(test)]
 fn atomic_write_all_checked(
     writes: &[(PathBuf, String)],
     expected: &[(PathBuf, Option<Vec<u8>>)],
@@ -341,6 +558,7 @@ fn atomic_write_all_checked(
     atomic_write_all_impl(writes, None, Some(expected))
 }
 
+#[cfg(test)]
 fn atomic_write_all_impl(
     writes: &[(PathBuf, String)],
     fail_before_install: Option<usize>,
@@ -469,10 +687,12 @@ fn atomic_write_all_impl(
     Ok(())
 }
 
+#[cfg(test)]
 fn cleanup_staged_temps(staged: &[(PathBuf, PathBuf, Option<PathBuf>)]) {
     for (temporary, _, _) in staged { let _ = fs::remove_file(temporary); }
 }
 
+#[cfg(test)]
 fn create_unique_sibling(path: &Path, kind: &str, index: usize) -> Result<(PathBuf, fs::File), (&'static str, String)> {
     for attempt in 0..1000u32 {
         let candidate = path.with_extension(format!("vaxis-{kind}-{}-{index}-{attempt}", std::process::id()));
@@ -485,6 +705,7 @@ fn create_unique_sibling(path: &Path, kind: &str, index: usize) -> Result<(PathB
     Err(("write_failed", format!("could not allocate a unique {kind} file beside {}", path.display())))
 }
 
+#[cfg(test)]
 fn unique_sibling_path(path: &Path, kind: &str, index: usize) -> Result<PathBuf, (&'static str, String)> {
     for attempt in 0..1000u32 {
         let candidate = path.with_extension(format!("vaxis-{kind}-{}-{index}-{attempt}", std::process::id()));
@@ -537,6 +758,63 @@ mod tests {
         assert!(validate_portable_mermaid(
             "flowchart TB\n  service[Service]\n%% vaxis:drill service trailing-junk\n%% vaxis:drill-line flowchart TB\n%% vaxis:drill-line child[Child]",
         ).is_err());
+        assert!(validate_portable_mermaid(
+            "flowchart TB\n  service[Service]\n  %% vaxis:drill service\n  %% vaxis:drill-line flowchart TB\n  %% vaxis:drill-line child[Child]",
+        ).is_err());
+        assert!(validate_portable_mermaid(
+            "flowchart TB\n  service[Service]\n%% vaxis:drill missing\n%% vaxis:drill-line flowchart TB\n%% vaxis:drill-line child[Child]",
+        ).is_err());
+    }
+
+    #[test]
+    fn rejects_remote_exports_outside_supported_limits() {
+        let oversized_count = PortableExport {
+            root_id: "root".into(), mermaid: "flowchart TB\n  a[A]".into(),
+            diagram_count: MAX_PORTABLE_DIAGRAMS + 1, revision: None,
+        };
+        assert_eq!(validate_export_limits(&oversized_count).unwrap_err().0, "remote_export_invalid");
+        let oversized_mermaid = PortableExport {
+            root_id: "root".into(), mermaid: "x".repeat(MAX_PORTABLE_MERMAID_BYTES + 1),
+            diagram_count: 1, revision: None,
+        };
+        assert_eq!(validate_export_limits(&oversized_mermaid).unwrap_err().0, "remote_export_too_large");
+    }
+
+    #[test]
+    fn anchored_initialization_preserves_a_target_that_appeared() {
+        let root = tempdir().unwrap();
+        let anchor = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        fs::write(root.path().join(ARCHITECTURE_FILE), "concurrent file").unwrap();
+        let error = atomic_write_all_anchored(
+            &anchor,
+            &[(PathBuf::from(ARCHITECTURE_FILE), "generated file".into())],
+            &[(PathBuf::from(ARCHITECTURE_FILE), None)],
+        ).unwrap_err();
+        assert_eq!(error.0, "local_changed_during_write");
+        assert_eq!(fs::read_to_string(root.path().join(ARCHITECTURE_FILE)).unwrap(), "concurrent file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn anchored_writer_cannot_follow_a_substituted_sync_directory() {
+        use std::os::unix::fs::symlink;
+        let root = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let sync = root.path().join("architecture");
+        let original = root.path().join("original-architecture");
+        fs::create_dir(&sync).unwrap();
+        let anchor = Dir::open_ambient_dir(&sync, ambient_authority()).unwrap();
+        fs::rename(&sync, &original).unwrap();
+        symlink(outside.path(), &sync).unwrap();
+
+        atomic_write_all_anchored(
+            &anchor,
+            &[(PathBuf::from(ARCHITECTURE_FILE), "safe".into())],
+            &[(PathBuf::from(ARCHITECTURE_FILE), None)],
+        ).unwrap();
+
+        assert_eq!(fs::read_to_string(original.join(ARCHITECTURE_FILE)).unwrap(), "safe");
+        assert!(!outside.path().join(ARCHITECTURE_FILE).exists());
     }
 
     #[test]
@@ -561,8 +839,9 @@ mod tests {
         let root = tempdir().unwrap();
         let target = root.path().join("architecture.vaxis.mmd");
         symlink(root.path().join("missing-target"), &target).unwrap();
+        let anchor = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
 
-        assert_eq!(refuse_existing_targets(&[target.as_path()]).unwrap_err().0, "target_exists");
+        assert_eq!(refuse_existing_targets_anchored(&anchor, &[Path::new("architecture.vaxis.mmd")]).unwrap_err().0, "target_exists");
         assert!(fs::symlink_metadata(target).unwrap().file_type().is_symlink());
     }
 

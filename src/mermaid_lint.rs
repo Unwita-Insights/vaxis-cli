@@ -143,6 +143,10 @@ fn word_present(haystack: &str, word: &str) -> bool {
     false
 }
 
+pub fn contains_node_reference(mermaid: &str, node_id: &str) -> bool {
+    word_present(mermaid, node_id)
+}
+
 /// The first meaningful (non-empty, non-`%%`-comment) line, trimmed.
 fn first_content_line(mermaid: &str) -> Option<&str> {
     mermaid
