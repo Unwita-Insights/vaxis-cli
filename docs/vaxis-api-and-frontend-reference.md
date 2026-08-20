@@ -243,7 +243,7 @@ vaxis diagrams sync init|status|pull
 
 The exporter serializes reviewed `scene_json` and falls back to stored `current_mermaid` plus
 `child_nodes` for unopened generated diagrams. Revision-safe sync push still requires a
-backend expected-revision precondition and is not exposed by CLI v0.5.14.
+backend expected-revision precondition and is not exposed by CLI v0.5.16.
 
 ### 4. Share a diagram publicly
 ```

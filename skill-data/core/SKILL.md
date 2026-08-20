@@ -444,7 +444,7 @@ After a successful `sync init`:
    files only. Perform Git writes only when the user explicitly asks; ask for separate approval
    immediately before pushing if it has not already been explicitly authorized.
 
-#### Historical architecture from Git (planned, not available in v0.5.14)
+#### Historical architecture from Git (planned, not available in v0.5.16)
 
 The intended future workflow is:
 
@@ -458,7 +458,7 @@ and return a Vaxis link. It must never overwrite the current Vaxis architecture 
 historical Git manifest. Requests such as "show the architecture from v1.2.0" or "render the
 architecture before the payment refactor" map to this workflow.
 
-`sync render` is NOT implemented in v0.5.14. Today, an old
+`sync render` is NOT implemented in v0.5.16. Today, an old
 `architecture.vaxis.mmd` can already be rendered manually: create a separate, new empty target
 root and run `diagrams import <targetId> --file architecture/architecture.vaxis.mmd --json`.
 Vaxis decodes the embedded drill payload and reconstructs the complete hierarchy. The future

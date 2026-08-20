@@ -7,7 +7,7 @@ This file starts with the release below. For anything earlier, see the
 [git history](https://github.com/Unwita-Insights/vaxis-cli/commits/main) and
 [GitHub releases](https://github.com/Unwita-Insights/vaxis-cli/releases).
 
-## [0.5.14] — 2026-08-20
+## [0.5.16] — 2026-08-20
 
 ### Added
 

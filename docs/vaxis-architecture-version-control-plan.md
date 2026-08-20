@@ -60,7 +60,7 @@ Vaxis users should be able to store their architecture beside their application 
 
 The repository is the durable source of truth. Vaxis remains the visual collaboration, AI-editing, drill-down, and sharing environment. Synchronization is explicit so that a web edit, CLI edit, and Git branch cannot silently overwrite one another.
 
-The complete design contains four user workflows. Version 0.5.14 implements the first three;
+The complete design contains four user workflows. Version 0.5.16 implements the first three;
 the fourth remains blocked on a backend concurrency contract:
 
 1. Link and export a Vaxis diagram tree into a repository.
@@ -385,7 +385,7 @@ These should follow after the basic state model is proven.
 5. Preserve the current working Vaxis tree and the historical manifest unchanged.
 6. Return the new snapshot link to Claude, Codex, or the invoking user.
 
-This command is not implemented in v0.5.14. Until it exists, agents must not invoke it or
+This command is not implemented in v0.5.16. Until it exists, agents must not invoke it or
 claim a complete historical tree was recreated. `diagrams import --file` can render one old
 `.mmd` file, while full drill-tree reconstruction requires this future workflow.
 
@@ -550,7 +550,7 @@ Error objects should use stable codes such as:
 
 ## Implementation plan
 
-### Phase 0: Validate the contract — completed for v0.5.14 scope
+### Phase 0: Validate the contract — completed for v0.5.16 scope
 
 - Confirm repository-as-source-of-truth positioning.
 - Use the selected `diagrams sync ...` command family.
@@ -561,7 +561,7 @@ Error objects should use stable codes such as:
 
 Deliverable: approved CLI/API specification with example fixtures.
 
-### Phase 1: Local model and status — implemented in v0.5.14
+### Phase 1: Local model and status — implemented in v0.5.16
 
 - Add manifest structs and schema validation.
 - Add safe path resolution and deterministic file naming.
@@ -572,7 +572,7 @@ Deliverable: approved CLI/API specification with example fixtures.
 
 Deliverable: read-only drift detection.
 
-### Phase 2: Initialize and pull — implemented in v0.5.14
+### Phase 2: Initialize and pull — implemented in v0.5.16
 
 - Implement `sync init` for the complete tree.
 - Implement staged file and manifest writes with backup-based best-effort rollback.
@@ -682,7 +682,7 @@ The Rust crate and npm package versions must remain in lockstep for release.
 
 ## Recommendation
 
-Version 0.5.14 proceeds with read-only status, Vaxis-to-Git export, and explicit pull. It uses
+Version 0.5.16 proceeds with read-only status, Vaxis-to-Git export, and explicit pull. It uses
 `.mmd` as the canonical diagram format and a versioned manifest for identity and hierarchy.
 Add push only after server-enforced optimistic concurrency is available. Avoid automatic Git
 operations and automatic deletion.

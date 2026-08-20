@@ -171,7 +171,7 @@ conflict-safe pull behavior.
   wait for backend optimistic-concurrency support.
 - **Historical Git rendering is planned, not shipped.** The reserved design is
   `diagrams sync render --ref <git-ref>`, creating a separate Vaxis snapshot tree with new
-  IDs. v0.5.14 must not invoke or advertise that command as available; a single old `.mmd`
+  IDs. v0.5.16 must not invoke or advertise that command as available; a single old `.mmd`
   portable file can be rendered with `diagrams import --file`, including its complete drill
   hierarchy when imported into a newly created empty target; the API rejects portable restores
   over targets with content or drill children. Automatic creation from a Git ref still needs

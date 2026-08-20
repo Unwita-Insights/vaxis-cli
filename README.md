@@ -149,6 +149,12 @@ hosts:
 vaxis install --skills
 ```
 
+For a non-interactive project install across all supported hosts:
+
+```bash
+vaxis install --skills --project
+```
+
 The small [`skills/vaxis/SKILL.md`](skills/vaxis/SKILL.md) file tells the assistant to load
 the complete, version-matched instructions with `vaxis skills get core`. Preview those
 instructions at any time with `vaxis skills preview core`.

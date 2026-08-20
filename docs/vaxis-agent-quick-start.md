@@ -36,6 +36,12 @@ Run the interactive installer:
 vaxis install --skills
 ```
 
+Install for every supported host in the current project without prompts:
+
+```bash
+vaxis install --skills --project
+```
+
 Or install explicitly for Claude or Codex:
 
 ```bash

@@ -554,6 +554,23 @@ fn strip_scene_json(v: &mut serde_json::Value) {
     }
 }
 
+async fn resolve_tree_root_id(client: &reqwest::Client, token: &str, diagram_id: &str) -> String {
+    let response = client
+        .get(format!("{}/api/diagrams/{}/tree", crate::config::base_url(), diagram_id))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await;
+    match response {
+        Ok(response) if response.status().is_success() => response
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|value| value["root_id"].as_str().map(str::to_string))
+            .unwrap_or_else(|| diagram_id.to_string()),
+        _ => diagram_id.to_string(),
+    }
+}
+
 async fn tree_cmd(token: &str, id: &str, json: bool) {
     let client = reqwest::Client::new();
     let resp = match client
@@ -852,10 +869,12 @@ async fn generate(
         }
     }
 
+    let root_id = resolve_tree_root_id(&client, token, id).await;
     if json {
-        let open_url = format!("{}/diagram/{}", crate::config::base_url(), id);
+        let open_url = format!("{}/diagram/{}", crate::config::base_url(), root_id);
         let mut out = serde_json::json!({
             "diagram_id": id,
+            "root_diagram_id": root_id,
             "mermaid":    mermaid,
             "drills":     created_drills,
             "open_url":   open_url
@@ -871,7 +890,7 @@ async fn generate(
     for line in mermaid.lines() {
         println!("  {}", line);
     }
-    println!("\n{} {}/diagram/{}", "Open:".cyan().bold(), crate::config::base_url(), id);
+    println!("\n{} {}/diagram/{}", "Open:".cyan().bold(), crate::config::base_url(), root_id);
 
     if !created_drills.is_empty() {
         println!(
@@ -2143,9 +2162,10 @@ async fn import_cmd(token: &str, id: &str, mermaid: &str, json: bool) {
         200 => {
             let result = resp.json::<serde_json::Value>().await.unwrap_or_default();
             let drill_count = result["drill_count"].as_u64().unwrap_or(0);
-            let open_url = format!("{}/diagram/{}", crate::config::base_url(), id);
+            let root_id = resolve_tree_root_id(&client, token, id).await;
+            let open_url = format!("{}/diagram/{}", crate::config::base_url(), root_id);
             if json {
-                println!("{}", serde_json::json!({"ok": true, "diagram_id": id, "drill_count": drill_count, "open_url": open_url}));
+                println!("{}", serde_json::json!({"ok": true, "diagram_id": id, "root_diagram_id": root_id, "drill_count": drill_count, "open_url": open_url}));
             } else {
                 println!("{} Mermaid imported to {}", "✓".green().bold(), id.dimmed());
                 println!("{} {}", "Open:".cyan().bold(), open_url);

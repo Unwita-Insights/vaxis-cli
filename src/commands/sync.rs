@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 #[cfg(test)]
 use std::fs::OpenOptions;
-use std::io::{ErrorKind, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 const MANIFEST_FILE: &str = "vaxis.yaml";
@@ -74,7 +74,7 @@ async fn init(token: &str, root_id: &str, dir: &Path, json: bool) -> Result<(), 
     if let Err((_, message)) = validate_remote_root(root_id, &remote) {
         return Err(("root_diagram_required", message));
     }
-    validate_portable_mermaid(&remote.mermaid)?;
+    validate_export_consistency(&remote)?;
     let source = normalized_mermaid(&remote.mermaid);
     let manifest = Manifest {
         schema_version: SCHEMA_VERSION,
@@ -121,12 +121,12 @@ async fn status(token: &str, dir: &Path, check: bool, json: bool) -> Result<Stat
         result => result?,
     };
     validate_remote_root(&manifest.root_diagram_id, &remote)?;
-    validate_portable_mermaid(&remote.mermaid)?;
-    let state = match fs::read_to_string(&file) {
+    validate_export_consistency(&remote)?;
+    let state = match read_local_bounded(&file) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => SyncState::LocalMissing,
         Err(_) => SyncState::InvalidLocal,
         Ok(local) => match validate_portable_mermaid(&local) {
-            Ok(()) => classify(&manifest.synced_hash, &local, &remote.mermaid),
+            Ok(_) => classify(&manifest.synced_hash, &local, &remote.mermaid),
             Err(_) => SyncState::InvalidLocal,
         },
     };
@@ -144,8 +144,8 @@ async fn pull(token: &str, dir: &Path, dry_run: bool, json: bool) -> Result<(), 
     let file = dir.join(&file_relative);
     let remote = fetch_export(token, &manifest.root_diagram_id).await?;
     validate_remote_root(&manifest.root_diagram_id, &remote)?;
-    validate_portable_mermaid(&remote.mermaid)?;
-    let (local, local_source) = match read_anchored(&anchor, &file_relative) {
+    validate_export_consistency(&remote)?;
+    let (local, local_source) = match read_anchored_bounded(&anchor, &file_relative) {
         Ok(bytes) => {
             let value = String::from_utf8(bytes.clone())
                 .map_err(|error| ("invalid_local", format!("cannot read {}: {error}", file.display())))?;
@@ -201,6 +201,17 @@ async fn fetch_export(token: &str, root_id: &str) -> Result<PortableExport, (&'s
     Ok(export)
 }
 
+fn validate_export_consistency(export: &PortableExport) -> Result<(), (&'static str, String)> {
+    validate_export_limits(export)?;
+    let encoded_count = validate_portable_mermaid(&export.mermaid)?;
+    if encoded_count != export.diagram_count {
+        return Err(("remote_export_invalid", format!(
+            "portable export declares {} diagram(s) but encodes {encoded_count}", export.diagram_count,
+        )));
+    }
+    Ok(())
+}
+
 fn validate_export_limits(export: &PortableExport) -> Result<(), (&'static str, String)> {
     if export.diagram_count == 0 || export.diagram_count > MAX_PORTABLE_DIAGRAMS {
         return Err(("remote_export_invalid", format!("portable export diagram count must be between 1 and {MAX_PORTABLE_DIAGRAMS}")));
@@ -211,7 +222,7 @@ fn validate_export_limits(export: &PortableExport) -> Result<(), (&'static str, 
     Ok(())
 }
 
-fn validate_portable_mermaid(value: &str) -> Result<(), (&'static str, String)> {
+fn validate_portable_mermaid(value: &str) -> Result<usize, (&'static str, String)> {
     let trimmed = value.trim();
     if trimmed.is_empty() { return Err(("mermaid_unavailable", "portable Mermaid export is empty".to_string())); }
     let lines: Vec<&str> = trimmed.lines().collect();
@@ -219,6 +230,7 @@ fn validate_portable_mermaid(value: &str) -> Result<(), (&'static str, String)> 
     let root_level = lines[..first_drill].join("\n");
     validate_diagram_level(&root_level, first_drill < lines.len())?;
     let mut levels = HashMap::from([(String::new(), root_level)]);
+    let mut diagram_count = 1usize;
 
     let mut index = first_drill;
     while index < lines.len() {
@@ -237,7 +249,7 @@ fn validate_portable_mermaid(value: &str) -> Result<(), (&'static str, String)> 
             return Err(("mermaid_not_renderable", "drill marker has no encoded payload".to_string()));
         }
         let payload = payload.join("\n");
-        validate_diagram_level(&payload, true)?;
+        validate_diagram_level(&payload, false)?;
         let explicit_path = payload.lines().find_map(|line| line.trim().strip_prefix("%% vaxis:path "));
         let parent = if let Some(path) = explicit_path {
             let (parent_path, final_node) = path.rsplit_once('/').unwrap_or(("", path));
@@ -252,14 +264,16 @@ fn validate_portable_mermaid(value: &str) -> Result<(), (&'static str, String)> 
             levels.values().find(|level| portable_level_contains_node(level, marker))
                 .ok_or_else(|| ("mermaid_not_renderable", format!("drill marker references missing parent node: {marker}")))?
         };
+        validate_diagram_level(parent, true)?;
         if !portable_level_contains_node(parent, marker) {
             return Err(("mermaid_not_renderable", format!("drill marker references missing parent node: {marker}")));
         }
         if let Some(path) = explicit_path { levels.insert(path.to_string(), payload); }
         else { levels.insert(format!("legacy-{index}-{marker}"), payload); }
+        diagram_count += 1;
         while index < lines.len() && lines[index].trim().is_empty() { index += 1; }
     }
-    Ok(())
+    Ok(diagram_count)
 }
 
 fn portable_level_contains_node(level: &str, node_id: &str) -> bool {
@@ -381,6 +395,25 @@ fn read_anchored(anchor: &Dir, path: &Path) -> std::io::Result<Vec<u8>> {
     let mut content = Vec::new();
     std::io::Read::read_to_end(&mut file, &mut content)?;
     Ok(content)
+}
+
+fn read_local_bounded(path: &Path) -> std::io::Result<String> {
+    let file = fs::File::open(path)?;
+    let bytes = read_bounded(file, MAX_PORTABLE_MERMAID_BYTES)?;
+    String::from_utf8(bytes).map_err(|error| std::io::Error::new(ErrorKind::InvalidData, error))
+}
+
+fn read_anchored_bounded(anchor: &Dir, path: &Path) -> std::io::Result<Vec<u8>> {
+    read_bounded(anchor.open(path)?, MAX_PORTABLE_MERMAID_BYTES)
+}
+
+fn read_bounded(reader: impl Read, limit: usize) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(std::io::Error::new(ErrorKind::InvalidData, format!("portable Mermaid exceeds {limit} bytes")));
+    }
+    Ok(bytes)
 }
 
 fn refuse_existing_targets_anchored(anchor: &Dir, paths: &[&Path]) -> Result<(), (&'static str, String)> {
@@ -523,7 +556,23 @@ fn atomic_write_all_anchored(
                 }
             }
             for (_, applied, applied_backup) in staged[..installed].iter().rev() {
-                if anchor.symlink_metadata(applied).is_ok() { let _ = anchor.remove_file(applied); }
+                let installed_bytes = writes.iter().find(|(write_path, _)| write_path == applied)
+                    .map(|(_, content)| content.as_bytes()).unwrap_or_default();
+                match read_anchored(anchor, applied) {
+                    Ok(current) if current == installed_bytes => {
+                        if anchor.remove_file(applied).is_err() {
+                            restoration_failures.push(applied.display().to_string());
+                            continue;
+                        }
+                    }
+                    Err(read_error) if read_error.kind() == ErrorKind::NotFound => {}
+                    _ => {
+                        // A process edited or replaced the installed file. Keep
+                        // that concurrent work and retain our backup for manual recovery.
+                        restoration_failures.push(applied.display().to_string());
+                        continue;
+                    }
+                }
                 if let Some(applied_backup) = applied_backup {
                     if anchor.rename(applied_backup, anchor, applied).is_err() {
                         restoration_failures.push(applied.display().to_string());
@@ -936,6 +985,37 @@ mod tests {
         ].join("\n");
 
         assert!(validate_portable_mermaid(&portable).is_ok());
+    }
+
+    #[test]
+    fn accepts_supported_non_flowchart_leaf_payload() {
+        let portable = [
+            "flowchart TB",
+            "  events[Event Flow]",
+            "%% vaxis:drill events",
+            "%% vaxis:drill-line sequenceDiagram",
+            "%% vaxis:drill-line   Producer->>Consumer: event",
+            "%% vaxis:drill-line %% vaxis:path events",
+        ].join("\n");
+        assert_eq!(validate_portable_mermaid(&portable).unwrap(), 2);
+    }
+
+    #[test]
+    fn rejects_export_count_that_does_not_match_encoded_tree() {
+        let export = PortableExport {
+            root_id: "root".into(),
+            mermaid: "flowchart TB\n  root[Root]".into(),
+            diagram_count: 2,
+            revision: None,
+        };
+        assert_eq!(validate_export_consistency(&export).unwrap_err().0, "remote_export_invalid");
+    }
+
+    #[test]
+    fn bounded_reader_rejects_oversized_local_content() {
+        let content = vec![b'x'; MAX_PORTABLE_MERMAID_BYTES + 1];
+        let error = read_bounded(std::io::Cursor::new(content), MAX_PORTABLE_MERMAID_BYTES).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
     }
 
     #[test]
