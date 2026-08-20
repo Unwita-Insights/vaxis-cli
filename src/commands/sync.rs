@@ -506,7 +506,10 @@ fn validate_sync_root_containment(dir: &Path) -> Result<(), (&'static str, Strin
     Ok(())
 }
 
-fn normalized_mermaid(value: &str) -> String { format!("{}\n", value.replace("\r\n", "\n").trim_end()) }
+fn normalized_mermaid(value: &str) -> String {
+    let line_endings = value.replace("\r\n", "\n").replace('\r', "\n");
+    format!("{}\n", line_endings.trim_end_matches('\n'))
+}
 fn content_hash(value: &str) -> String { format!("{:x}", Sha256::digest(normalized_mermaid(value).as_bytes())) }
 fn classify(base: &str, local: &str, remote: &str) -> SyncState {
     let local_changed = content_hash(local) != base;
@@ -854,7 +857,15 @@ fn fail(code: &'static str, message: &str, json: bool) -> ! {
 mod tests {
     use super::*;
     use tempfile::tempdir;
-    #[test] fn hashes_normalize_line_endings() { assert_eq!(content_hash("flowchart TB\r\na-->b"), content_hash("flowchart TB\na-->b\n")); }
+    #[test]
+    fn hashes_normalize_line_endings_without_discarding_content_whitespace() {
+        let lf = "flowchart TB\na-->b\n";
+        assert_eq!(content_hash("flowchart TB\r\na-->b\r\n"), content_hash(lf));
+        assert_eq!(content_hash("flowchart TB\ra-->b\r"), content_hash(lf));
+        assert_eq!(normalized_mermaid("flowchart TB\na-->b\n\n"), lf);
+        assert_ne!(content_hash("flowchart TB\na-->b  \n"), content_hash(lf));
+        assert_ne!(content_hash("flowchart TB\na-->b\t\n"), content_hash(lf));
+    }
     #[test] fn classifies_single_file_states() {
         let base = content_hash("flowchart TB\na-->b");
         assert_eq!(classify(&base, "flowchart TB\na-->b", "flowchart TB\na-->b"), SyncState::InSync);
