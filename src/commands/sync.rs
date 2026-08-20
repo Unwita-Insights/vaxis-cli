@@ -140,8 +140,10 @@ async fn status(token: &str, dir: &Path, check: bool, json: bool) -> Result<Stat
 
 async fn pull(token: &str, dir: &Path, dry_run: bool, json: bool) -> Result<(), (&'static str, String)> {
     let anchor = open_sync_anchor(dir, false)?;
+    reject_symlink_path(&anchor, Path::new(MANIFEST_FILE))?;
     let (_, mut manifest, manifest_source) = load_manifest_anchored(&anchor, dir)?;
     let file_relative = validate_relative_file(Path::new(&manifest.file))?;
+    reject_symlink_path(&anchor, &file_relative)?;
     let file = dir.join(&file_relative);
     let remote = fetch_export(token, &manifest.root_diagram_id).await?;
     validate_remote_root(&manifest.root_diagram_id, &remote)?;
@@ -396,6 +398,25 @@ fn read_anchored(anchor: &Dir, path: &Path) -> std::io::Result<Vec<u8>> {
     let mut content = Vec::new();
     std::io::Read::read_to_end(&mut file, &mut content)?;
     Ok(content)
+}
+
+fn reject_symlink_path(anchor: &Dir, path: &Path) -> Result<(), (&'static str, String)> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        match anchor.symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err((
+                    "symlink_destination_unsupported",
+                    format!("sync pull cannot update symlinked path {}; replace it with a regular in-repository path", current.display()),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(("local_read_failed", format!("cannot inspect {}: {error}", current.display()))),
+        }
+    }
+    Ok(())
 }
 
 fn read_local_bounded(path: &Path) -> std::io::Result<String> {
@@ -1020,6 +1041,29 @@ mod tests {
 
         assert_eq!(refuse_existing_targets_anchored(&anchor, &[Path::new("architecture.vaxis.mmd")]).unwrap_err().0, "target_exists");
         assert!(fs::symlink_metadata(target).unwrap().file_type().is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pull_destination_validation_rejects_file_and_parent_symlinks() {
+        use std::os::unix::fs::symlink;
+        let root = tempdir().unwrap();
+        let anchor = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        fs::write(root.path().join("target.mmd"), "flowchart TB\n  a[A]").unwrap();
+        symlink("target.mmd", root.path().join("architecture.vaxis.mmd")).unwrap();
+
+        assert_eq!(
+            reject_symlink_path(&anchor, Path::new("architecture.vaxis.mmd")).unwrap_err().0,
+            "symlink_destination_unsupported",
+        );
+
+        fs::create_dir(root.path().join("real-parent")).unwrap();
+        symlink("real-parent", root.path().join("linked-parent")).unwrap();
+        assert_eq!(
+            reject_symlink_path(&anchor, Path::new("linked-parent/architecture.vaxis.mmd")).unwrap_err().0,
+            "symlink_destination_unsupported",
+        );
+        assert!(reject_symlink_path(&anchor, Path::new("regular/missing.mmd")).is_ok());
     }
 
     #[test]

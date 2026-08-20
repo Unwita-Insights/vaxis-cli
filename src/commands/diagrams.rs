@@ -3,6 +3,8 @@ use dialoguer::{Select, Confirm, theme::ColorfulTheme};
 use crate::cli::{DiagramsAction, SessionsAction};
 use crate::config;
 
+const MAX_TREE_ROOT_LOOKUP_BYTES: usize = 2_000_000;
+
 fn auth_token() -> Option<String> {
     config::load().user.map(|u| u.token)
 }
@@ -555,23 +557,36 @@ fn strip_scene_json(v: &mut serde_json::Value) {
 }
 
 async fn resolve_tree_root_id(client: &reqwest::Client, token: &str, diagram_id: &str) -> Option<String> {
-    let response = client
+    let mut response = client
         .get(format!("{}/api/diagrams/{}/tree", crate::config::base_url(), diagram_id))
         .header("Authorization", format!("Bearer {}", token))
         .send()
-        .await;
-    match response {
-        Ok(response) if response.status().is_success() => response
-            .json::<serde_json::Value>()
-            .await
-            .ok()
-            .and_then(extract_tree_root_id),
-        _ => None,
+        .await
+        .ok()?;
+    if !response.status().is_success()
+        || response.content_length().is_some_and(|length| length > MAX_TREE_ROOT_LOOKUP_BYTES as u64)
+    {
+        return None;
     }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if body.len().saturating_add(chunk.len()) > MAX_TREE_ROOT_LOOKUP_BYTES {
+            return None;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    extract_tree_root_id_from_body(&body)
 }
 
 fn extract_tree_root_id(value: serde_json::Value) -> Option<String> {
     value["root_id"].as_str().filter(|id| !id.is_empty()).map(str::to_string)
+}
+
+fn extract_tree_root_id_from_body(body: &[u8]) -> Option<String> {
+    if body.len() > MAX_TREE_ROOT_LOOKUP_BYTES {
+        return None;
+    }
+    serde_json::from_slice(body).ok().and_then(extract_tree_root_id)
 }
 
 async fn tree_cmd(token: &str, id: &str, json: bool) {
@@ -972,7 +987,7 @@ fn direct_mermaid_body(
 
 #[cfg(test)]
 mod direct_direction_tests {
-    use super::{direct_mermaid_body, extract_tree_root_id};
+    use super::{direct_mermaid_body, extract_tree_root_id, extract_tree_root_id_from_body, MAX_TREE_ROOT_LOOKUP_BYTES};
 
     #[test]
     fn old_direct_mermaid_body_stays_unchanged() {
@@ -1008,6 +1023,18 @@ mod direct_direction_tests {
         assert_eq!(
             extract_tree_root_id(serde_json::json!({"root_id": "actual-root"})),
             Some("actual-root".to_string()),
+        );
+    }
+
+    #[test]
+    fn tree_root_lookup_body_is_bounded() {
+        assert_eq!(
+            extract_tree_root_id_from_body(br#"{"root_id":"root"}"#),
+            Some("root".to_string()),
+        );
+        assert_eq!(
+            extract_tree_root_id_from_body(&vec![b' '; MAX_TREE_ROOT_LOOKUP_BYTES + 1]),
+            None,
         );
     }
 }
