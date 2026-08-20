@@ -181,6 +181,31 @@ fn status_reports_invalid_utf8_and_malformed_mermaid_as_invalid_local() {
 }
 
 #[test]
+fn status_reports_an_operational_local_read_failure_as_an_error() {
+    let repo = tempdir().unwrap();
+    Command::new("git").args(["init", "--quiet"]).current_dir(repo.path()).status().unwrap();
+    let architecture_dir = repo.path().join("architecture");
+    fs::create_dir_all(architecture_dir.join("architecture.vaxis.mmd")).unwrap();
+    fs::write(architecture_dir.join("vaxis.yaml"),
+        "schema_version: 2\nroot_diagram_id: root\nfile: architecture.vaxis.mmd\nsynced_hash: baseline\n",
+    ).unwrap();
+    let body = serde_json::json!({
+        "root_id":"root", "diagram_count":1, "mermaid":"flowchart TB\n  remote[Remote]",
+    }).to_string();
+    let (url, server) = one_response(body);
+    let config = config_home("token");
+
+    let output = run(
+        &["diagrams", "sync", "status", "--json"],
+        repo.path(), config.path(), Some(&url),
+    );
+    server.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["code"], "local_read_failed");
+}
+
+#[test]
 fn pull_replaces_existing_architecture_and_manifest_together() {
     let repo = tempdir().unwrap();
     Command::new("git").args(["init", "--quiet"]).current_dir(repo.path()).status().unwrap();

@@ -124,7 +124,8 @@ async fn status(token: &str, dir: &Path, check: bool, json: bool) -> Result<Stat
     validate_export_consistency(&remote)?;
     let state = match read_local_bounded(&file) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => SyncState::LocalMissing,
-        Err(_) => SyncState::InvalidLocal,
+        Err(error) if error.kind() == ErrorKind::InvalidData => SyncState::InvalidLocal,
+        Err(error) => return Err(("local_read_failed", format!("cannot read {}: {error}", file.display()))),
         Ok(local) => match validate_portable_mermaid(&local) {
             Ok(_) => classify(&manifest.synced_hash, &local, &remote.mermaid),
             Err(_) => SyncState::InvalidLocal,
@@ -496,10 +497,18 @@ fn atomic_write_all_anchored(
     writes: &[(PathBuf, String)],
     expected: &[(PathBuf, Option<Vec<u8>>)],
 ) -> Result<(), (&'static str, String)> {
+    for (path, _) in writes {
+        if !expected.iter().any(|(expected_path, _)| expected_path == path) {
+            return Err(("write_failed", format!("missing expected snapshot for {}", path.display())));
+        }
+    }
     let mut staged: Vec<(PathBuf, PathBuf, Option<PathBuf>)> = Vec::new();
     for (index, (path, content)) in writes.iter().enumerate() {
         if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-            anchor.create_dir_all(parent).map_err(|error| ("write_failed", error.to_string()))?;
+            if let Err(error) = anchor.create_dir_all(parent) {
+                cleanup_staged_temps_anchored(anchor, &staged);
+                return Err(("write_failed", error.to_string()));
+            }
         }
         let mut temporary = None;
         for attempt in 0..1000u32 {
@@ -508,20 +517,41 @@ fn atomic_write_all_anchored(
             options.write(true).create_new(true);
             match anchor.open_with(&candidate, &options) {
                 Ok(mut file) => {
-                    file.write_all(content.as_bytes()).and_then(|_| file.sync_all())
-                        .map_err(|error| ("write_failed", error.to_string()))?;
+                    if let Err(error) = file.write_all(content.as_bytes()).and_then(|_| file.sync_all()) {
+                        drop(file);
+                        let _ = anchor.remove_file(&candidate);
+                        cleanup_staged_temps_anchored(anchor, &staged);
+                        return Err(("write_failed", error.to_string()));
+                    }
                     temporary = Some(candidate);
                     break;
                 }
                 Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(("write_failed", error.to_string())),
+                Err(error) => {
+                    cleanup_staged_temps_anchored(anchor, &staged);
+                    return Err(("write_failed", error.to_string()));
+                }
             }
         }
-        let temporary = temporary.ok_or_else(|| ("write_failed", format!("cannot stage {}", path.display())))?;
+        let Some(temporary) = temporary else {
+            cleanup_staged_temps_anchored(anchor, &staged);
+            return Err(("write_failed", format!("cannot stage {}", path.display())));
+        };
         let backup = match anchor.symlink_metadata(path) {
-            Ok(_) => Some(path.with_extension(format!("vaxis-bak-{}-{index}", std::process::id()))),
+            Ok(_) => match unique_anchored_sibling_path(anchor, path, "bak", index) {
+                Ok(backup) => Some(backup),
+                Err(error) => {
+                    let _ = anchor.remove_file(&temporary);
+                    cleanup_staged_temps_anchored(anchor, &staged);
+                    return Err(error);
+                }
+            },
             Err(error) if error.kind() == ErrorKind::NotFound => None,
-            Err(error) => return Err(("write_failed", error.to_string())),
+            Err(error) => {
+                let _ = anchor.remove_file(&temporary);
+                cleanup_staged_temps_anchored(anchor, &staged);
+                return Err(("write_failed", error.to_string()));
+            }
         };
         staged.push((temporary, path.clone(), backup));
     }
@@ -530,10 +560,12 @@ fn atomic_write_all_anchored(
     for (temporary, path, backup) in &staged {
         let expected_content = expected.iter().find(|(expected_path, _)| expected_path == path)
             .map(|(_, content)| content)
-            .ok_or_else(|| ("write_failed", format!("missing expected snapshot for {}", path.display())))?;
+            .expect("expected snapshots were validated before staging");
+        let mut original_was_backed_up = false;
         let result = (|| -> std::io::Result<()> {
             if let Some(backup) = backup {
                 anchor.rename(path, anchor, backup)?;
+                original_was_backed_up = true;
                 if expected_content.as_ref() != Some(&read_anchored(anchor, backup)?) {
                     return Err(std::io::Error::new(ErrorKind::WouldBlock, "destination changed during write"));
                 }
@@ -549,10 +581,12 @@ fn atomic_write_all_anchored(
         })();
         if let Err(error) = result {
             let mut restoration_failures = Vec::new();
-            if let Some(backup) = backup {
-                if anchor.symlink_metadata(path).is_ok() { let _ = anchor.remove_file(path); }
-                if anchor.rename(backup, anchor, path).is_err() {
-                    restoration_failures.push(path.display().to_string());
+            if original_was_backed_up {
+                if let Some(backup) = backup {
+                    if anchor.symlink_metadata(path).is_ok() { let _ = anchor.remove_file(path); }
+                    if anchor.rename(backup, anchor, path).is_err() {
+                        restoration_failures.push(path.display().to_string());
+                    }
                 }
             }
             for (_, applied, applied_backup) in staged[..installed].iter().rev() {
@@ -592,6 +626,32 @@ fn atomic_write_all_anchored(
         if let Some(backup) = backup { let _ = anchor.remove_file(backup); }
     }
     Ok(())
+}
+
+fn cleanup_staged_temps_anchored(anchor: &Dir, staged: &[(PathBuf, PathBuf, Option<PathBuf>)]) {
+    for (temporary, _, _) in staged {
+        let _ = anchor.remove_file(temporary);
+    }
+}
+
+fn unique_anchored_sibling_path(
+    anchor: &Dir,
+    path: &Path,
+    kind: &str,
+    index: usize,
+) -> Result<PathBuf, (&'static str, String)> {
+    for attempt in 0..1000u32 {
+        let candidate = path.with_extension(format!(
+            "vaxis-{kind}-{}-{index}-{attempt}",
+            std::process::id(),
+        ));
+        match anchor.symlink_metadata(&candidate) {
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(candidate),
+            Ok(_) => continue,
+            Err(error) => return Err(("write_failed", error.to_string())),
+        }
+    }
+    Err(("write_failed", format!("cannot allocate a backup beside {}", path.display())))
 }
 
 #[cfg(test)]
@@ -841,6 +901,74 @@ mod tests {
         ).unwrap_err();
         assert_eq!(error.0, "local_changed_during_write");
         assert_eq!(fs::read_to_string(root.path().join(ARCHITECTURE_FILE)).unwrap(), "concurrent file");
+    }
+
+    #[test]
+    fn anchored_writer_cleans_earlier_temps_when_later_staging_fails() {
+        let root = tempdir().unwrap();
+        let anchor = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        let process_id = std::process::id();
+        for attempt in 0..1000u32 {
+            fs::write(
+                root.path().join(format!("blocked.vaxis-tmp-{process_id}-1-{attempt}")),
+                "occupied",
+            ).unwrap();
+        }
+
+        let error = atomic_write_all_anchored(
+            &anchor,
+            &[
+                (PathBuf::from("first.mmd"), "first".into()),
+                (PathBuf::from("blocked.mmd"), "second".into()),
+            ],
+            &[
+                (PathBuf::from("first.mmd"), None),
+                (PathBuf::from("blocked.mmd"), None),
+            ],
+        ).unwrap_err();
+
+        assert_eq!(error.0, "write_failed");
+        assert!(!root.path().join(format!("first.vaxis-tmp-{process_id}-0-0")).exists());
+        assert!(!root.path().join("first.mmd").exists());
+    }
+
+    #[test]
+    fn anchored_writer_uses_a_fresh_backup_and_preserves_stale_recovery_files() {
+        let root = tempdir().unwrap();
+        let anchor = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        let destination = PathBuf::from("architecture.vaxis.mmd");
+        fs::write(root.path().join(&destination), "original").unwrap();
+        let stale_backup = root.path().join(format!(
+            "architecture.vaxis-bak-{}-0-0",
+            std::process::id(),
+        ));
+        fs::write(&stale_backup, "stale recovery data").unwrap();
+
+        atomic_write_all_anchored(
+            &anchor,
+            &[(destination.clone(), "replacement".into())],
+            &[(destination.clone(), Some(b"original".to_vec()))],
+        ).unwrap();
+
+        assert_eq!(fs::read_to_string(root.path().join(destination)).unwrap(), "replacement");
+        assert_eq!(fs::read_to_string(stale_backup).unwrap(), "stale recovery data");
+    }
+
+    #[test]
+    fn anchored_writer_cleans_staging_when_an_expected_snapshot_is_missing() {
+        let root = tempdir().unwrap();
+        let anchor = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        let process_id = std::process::id();
+
+        let error = atomic_write_all_anchored(
+            &anchor,
+            &[(PathBuf::from("architecture.mmd"), "replacement".into())],
+            &[],
+        ).unwrap_err();
+
+        assert_eq!(error.0, "write_failed");
+        assert!(!root.path().join(format!("architecture.vaxis-tmp-{process_id}-0-0")).exists());
+        assert!(!root.path().join("architecture.mmd").exists());
     }
 
     #[cfg(unix)]

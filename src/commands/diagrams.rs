@@ -554,7 +554,7 @@ fn strip_scene_json(v: &mut serde_json::Value) {
     }
 }
 
-async fn resolve_tree_root_id(client: &reqwest::Client, token: &str, diagram_id: &str) -> String {
+async fn resolve_tree_root_id(client: &reqwest::Client, token: &str, diagram_id: &str) -> Option<String> {
     let response = client
         .get(format!("{}/api/diagrams/{}/tree", crate::config::base_url(), diagram_id))
         .header("Authorization", format!("Bearer {}", token))
@@ -565,10 +565,13 @@ async fn resolve_tree_root_id(client: &reqwest::Client, token: &str, diagram_id:
             .json::<serde_json::Value>()
             .await
             .ok()
-            .and_then(|value| value["root_id"].as_str().map(str::to_string))
-            .unwrap_or_else(|| diagram_id.to_string()),
-        _ => diagram_id.to_string(),
+            .and_then(extract_tree_root_id),
+        _ => None,
     }
+}
+
+fn extract_tree_root_id(value: serde_json::Value) -> Option<String> {
+    value["root_id"].as_str().filter(|id| !id.is_empty()).map(str::to_string)
 }
 
 async fn tree_cmd(token: &str, id: &str, json: bool) {
@@ -871,14 +874,19 @@ async fn generate(
 
     let root_id = resolve_tree_root_id(&client, token, id).await;
     if json {
-        let open_url = format!("{}/diagram/{}", crate::config::base_url(), root_id);
         let mut out = serde_json::json!({
             "diagram_id": id,
-            "root_diagram_id": root_id,
             "mermaid":    mermaid,
-            "drills":     created_drills,
-            "open_url":   open_url
+            "drills":     created_drills
         });
+        if let Some(root_id) = &root_id {
+            out["root_diagram_id"] = serde_json::Value::String(root_id.clone());
+            out["open_url"] = serde_json::Value::String(format!("{}/diagram/{root_id}", crate::config::base_url()));
+        } else {
+            out["root_resolution_error"] = serde_json::Value::String(
+                "diagram updated, but the root diagram could not be resolved; retry diagrams tree before versioning".to_string(),
+            );
+        }
         if let Some(s) = chat_session_id { out["chat_session_id"] = serde_json::Value::String(s.to_string()); }
         // A real edit can still ship an advisory notice (e.g. truncation). Keep it.
         if let Some(n) = notice { out["notice"] = serde_json::Value::String(n.to_string()); }
@@ -890,7 +898,12 @@ async fn generate(
     for line in mermaid.lines() {
         println!("  {}", line);
     }
-    println!("\n{} {}/diagram/{}", "Open:".cyan().bold(), crate::config::base_url(), root_id);
+    if let Some(root_id) = root_id {
+        println!("\n{} {}/diagram/{}", "Open:".cyan().bold(), crate::config::base_url(), root_id);
+    } else {
+        println!("\n{} Diagram updated, but its root could not be resolved. Run {} and use the returned root.",
+            "Warning:".yellow().bold(), format!("vaxis diagrams tree {id} --json").yellow());
+    }
 
     if !created_drills.is_empty() {
         println!(
@@ -959,7 +972,7 @@ fn direct_mermaid_body(
 
 #[cfg(test)]
 mod direct_direction_tests {
-    use super::direct_mermaid_body;
+    use super::{direct_mermaid_body, extract_tree_root_id};
 
     #[test]
     fn old_direct_mermaid_body_stays_unchanged() {
@@ -985,6 +998,16 @@ mod direct_direction_tests {
                 "is_fresh_generation": true,
                 "viewport": { "width": 1440, "height": 900 }
             })
+        );
+    }
+
+    #[test]
+    fn missing_or_empty_tree_root_is_not_replaced_with_the_requested_child() {
+        assert_eq!(extract_tree_root_id(serde_json::json!({})), None);
+        assert_eq!(extract_tree_root_id(serde_json::json!({"root_id": ""})), None);
+        assert_eq!(
+            extract_tree_root_id(serde_json::json!({"root_id": "actual-root"})),
+            Some("actual-root".to_string()),
         );
     }
 }
@@ -2163,12 +2186,25 @@ async fn import_cmd(token: &str, id: &str, mermaid: &str, json: bool) {
             let result = resp.json::<serde_json::Value>().await.unwrap_or_default();
             let drill_count = result["drill_count"].as_u64().unwrap_or(0);
             let root_id = resolve_tree_root_id(&client, token, id).await;
-            let open_url = format!("{}/diagram/{}", crate::config::base_url(), root_id);
             if json {
-                println!("{}", serde_json::json!({"ok": true, "diagram_id": id, "root_diagram_id": root_id, "drill_count": drill_count, "open_url": open_url}));
+                let mut output = serde_json::json!({"ok": true, "diagram_id": id, "drill_count": drill_count});
+                if let Some(root_id) = root_id {
+                    output["root_diagram_id"] = serde_json::Value::String(root_id.clone());
+                    output["open_url"] = serde_json::Value::String(format!("{}/diagram/{root_id}", crate::config::base_url()));
+                } else {
+                    output["root_resolution_error"] = serde_json::Value::String(
+                        "diagram imported, but the root diagram could not be resolved; retry diagrams tree before versioning".to_string(),
+                    );
+                }
+                println!("{output}");
             } else {
                 println!("{} Mermaid imported to {}", "✓".green().bold(), id.dimmed());
-                println!("{} {}", "Open:".cyan().bold(), open_url);
+                if let Some(root_id) = root_id {
+                    println!("{} {}/diagram/{}", "Open:".cyan().bold(), crate::config::base_url(), root_id);
+                } else {
+                    println!("{} Root could not be resolved. Run {} and use the returned root.",
+                        "Warning:".yellow().bold(), format!("vaxis diagrams tree {id} --json").yellow());
+                }
             }
         }
         s => {
