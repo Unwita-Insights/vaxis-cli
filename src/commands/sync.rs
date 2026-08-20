@@ -229,7 +229,9 @@ fn validate_portable_mermaid(value: &str) -> Result<usize, (&'static str, String
     let trimmed = value.trim();
     if trimmed.is_empty() { return Err(("mermaid_unavailable", "portable Mermaid export is empty".to_string())); }
     let lines: Vec<&str> = trimmed.lines().collect();
-    let first_drill = lines.iter().position(|line| line.starts_with("%% vaxis:drill ")).unwrap_or(lines.len());
+    let first_drill = lines.iter()
+        .position(|line| crate::mermaid_lint::parse_marker(line).is_some())
+        .unwrap_or(lines.len());
     let root_level = lines[..first_drill].join("\n");
     validate_diagram_level(&root_level, first_drill < lines.len())?;
     let mut levels = HashMap::from([(String::new(), root_level)]);
@@ -237,8 +239,7 @@ fn validate_portable_mermaid(value: &str) -> Result<usize, (&'static str, String
 
     let mut index = first_drill;
     while index < lines.len() {
-        let marker = lines[index].strip_prefix("%% vaxis:drill ")
-            .filter(|node_id| !node_id.is_empty() && node_id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'));
+        let marker = crate::mermaid_lint::parse_marker(lines[index]);
         let Some(marker) = marker else {
             return Err(("mermaid_not_renderable", format!("unexpected portable content at line {}", index + 1)));
         };
@@ -894,6 +895,20 @@ mod tests {
         assert!(validate_portable_mermaid(
             "flowchart TB\n  service[Service]\n%% vaxis:drill missing\n%% vaxis:drill-line flowchart TB\n%% vaxis:drill-line child[Child]",
         ).is_err());
+    }
+
+    #[test]
+    fn portable_parser_accepts_contract_compliant_marker_whitespace() {
+        for marker in [
+            "%% vaxis:drill service  ",
+            "%%\tvaxis:drill\tservice\t",
+            "%%  vaxis:drill   service",
+        ] {
+            let portable = format!(
+                "flowchart TB\n  service[Service]\n{marker}\n%% vaxis:drill-line flowchart TB\n%% vaxis:drill-line child[Child]",
+            );
+            assert_eq!(validate_portable_mermaid(&portable).unwrap(), 2, "rejected {marker:?}");
+        }
     }
 
     #[test]

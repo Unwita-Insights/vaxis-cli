@@ -201,8 +201,8 @@ workflow:
 
 ```bash
 git status --short -- architecture
-git diff -- architecture
 git add -- architecture/architecture.vaxis.mmd architecture/vaxis.yaml
+git diff --cached -- architecture
 git commit -m "docs: update system architecture"
 ```
 

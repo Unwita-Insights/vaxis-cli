@@ -76,7 +76,7 @@ impl LintReport {
 
 /// Parse a single line as a column-0 drill marker, returning the node id.
 /// Mirrors the JS regex `^%%\s*vaxis:drill\s+([\w-]+)\s*$` (ASCII `\w`).
-fn parse_marker(line: &str) -> Option<&str> {
+pub(crate) fn parse_marker(line: &str) -> Option<&str> {
     // `^%%` — the line must START with `%%`; leading whitespace disqualifies it.
     let rest = line.strip_prefix("%%")?;
     // `\s*`
