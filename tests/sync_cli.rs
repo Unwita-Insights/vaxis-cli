@@ -33,6 +33,10 @@ fn run(args: &[&str], cwd: &std::path::Path, config: &std::path::Path, url: Opti
 }
 
 fn one_response(body: String) -> (String, thread::JoinHandle<()>) {
+    response_with_status("200 OK", body)
+}
+
+fn response_with_status(status: &'static str, body: String) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -57,12 +61,53 @@ fn one_response(body: String) -> (String, thread::JoinHandle<()>) {
             request.extend_from_slice(&buffer[..count]);
         }
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(), body,
         );
         stream.write_all(response.as_bytes()).unwrap();
     });
     (url, handle)
+}
+
+#[test]
+fn status_reports_remote_missing_and_check_exits_two() {
+    for check in [false, true] {
+        let repo = tempdir().unwrap();
+        Command::new("git").args(["init", "--quiet"]).current_dir(repo.path()).status().unwrap();
+        let architecture_dir = repo.path().join("architecture");
+        fs::create_dir_all(&architecture_dir).unwrap();
+        fs::write(architecture_dir.join("architecture.vaxis.mmd"), "flowchart TB\n  a[A]\n").unwrap();
+        fs::write(architecture_dir.join("vaxis.yaml"),
+            "schema_version: 2\nroot_diagram_id: deleted\nfile: architecture.vaxis.mmd\nsynced_hash: baseline\n",
+        ).unwrap();
+        let (url, server) = response_with_status("404 Not Found", "{}".into());
+        let config = config_home("token");
+        let mut args = vec!["diagrams", "sync", "status", "--json"];
+        if check { args.push("--check"); }
+
+        let output = run(&args, repo.path(), config.path(), Some(&url));
+        server.join().unwrap();
+        assert_eq!(output.status.code(), Some(if check { 2 } else { 0 }));
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["state"], "remote_missing");
+    }
+}
+
+#[test]
+fn sync_preserves_session_expired_for_unauthorized_requests() {
+    let repo = tempdir().unwrap();
+    Command::new("git").args(["init", "--quiet"]).current_dir(repo.path()).status().unwrap();
+    let (url, server) = response_with_status("401 Unauthorized", "{}".into());
+    let config = config_home("expired");
+
+    let output = run(
+        &["diagrams", "sync", "init", "root", "--json"],
+        repo.path(), config.path(), Some(&url),
+    );
+    server.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["code"], "session_expired");
 }
 
 #[test]
@@ -162,6 +207,34 @@ fn pull_replaces_existing_architecture_and_manifest_together() {
     let manifest = fs::read_to_string(architecture_dir.join("vaxis.yaml")).unwrap();
     assert!(manifest.contains(&normalized_hash(remote)));
     assert!(manifest.contains("remote_revision: 7"));
+}
+
+#[test]
+fn pull_leaves_local_only_changes_untouched() {
+    let repo = tempdir().unwrap();
+    Command::new("git").args(["init", "--quiet"]).current_dir(repo.path()).status().unwrap();
+    let architecture_dir = repo.path().join("architecture");
+    fs::create_dir_all(&architecture_dir).unwrap();
+    let baseline = "flowchart TB\n  baseline[Baseline]\n";
+    let local = "flowchart TB\n  local[Local Edit]\n";
+    fs::write(architecture_dir.join("architecture.vaxis.mmd"), local).unwrap();
+    fs::write(architecture_dir.join("vaxis.yaml"), format!(
+        "schema_version: 2\nroot_diagram_id: root\nfile: architecture.vaxis.mmd\nsynced_hash: {}\n",
+        normalized_hash(baseline),
+    )).unwrap();
+    let body = serde_json::json!({"root_id":"root","diagram_count":1,"mermaid":baseline}).to_string();
+    let (url, server) = one_response(body);
+    let config = config_home("token");
+
+    let output = run(
+        &["diagrams", "sync", "pull", "--json"],
+        repo.path(), config.path(), Some(&url),
+    );
+    server.join().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["updated"], false);
+    assert_eq!(fs::read_to_string(architecture_dir.join("architecture.vaxis.mmd")).unwrap(), local);
 }
 
 #[test]

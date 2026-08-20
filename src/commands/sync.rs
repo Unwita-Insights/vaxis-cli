@@ -32,14 +32,15 @@ struct PortableExport {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum SyncState { InSync, LocalChanged, RemoteChanged, Conflict, LocalMissing, InvalidLocal }
+enum SyncState { InSync, LocalChanged, RemoteChanged, Conflict, LocalMissing, RemoteMissing, InvalidLocal }
 
 impl SyncState {
     fn as_str(self) -> &'static str {
         match self {
             Self::InSync => "in_sync", Self::LocalChanged => "local_changed",
             Self::RemoteChanged => "remote_changed", Self::Conflict => "conflict",
-            Self::LocalMissing => "local_missing", Self::InvalidLocal => "invalid_local",
+            Self::LocalMissing => "local_missing", Self::RemoteMissing => "remote_missing",
+            Self::InvalidLocal => "invalid_local",
         }
     }
 }
@@ -98,9 +99,18 @@ async fn init(token: &str, root_id: &str, dir: &Path, json: bool) -> Result<(), 
 }
 
 async fn status(token: &str, dir: &Path, check: bool, json: bool) -> Result<StatusItem, (&'static str, String)> {
-    let (_, manifest) = load_manifest(dir)?;
+    let (_, manifest, _) = load_manifest(dir)?;
     let file = safe_join(dir, Path::new(&manifest.file))?;
-    let remote = fetch_export(token, &manifest.root_diagram_id).await?;
+    let remote = match fetch_export(token, &manifest.root_diagram_id).await {
+        Err(("remote_diagram_missing", _)) => {
+            let item = StatusItem { file: file.display().to_string(), state: SyncState::RemoteMissing };
+            if json { println!("{}", serde_json::json!({"ok":true,"file":item.file,"state":item.state})); }
+            else { println!("{}  {}", item.state.as_str(), item.file); }
+            if check { std::process::exit(2); }
+            return Ok(item);
+        }
+        result => result?,
+    };
     validate_remote_root(&manifest.root_diagram_id, &remote)?;
     validate_portable_mermaid(&remote.mermaid)?;
     let state = match fs::read_to_string(&file) {
@@ -119,22 +129,24 @@ async fn status(token: &str, dir: &Path, check: bool, json: bool) -> Result<Stat
 }
 
 async fn pull(token: &str, dir: &Path, dry_run: bool, json: bool) -> Result<(), (&'static str, String)> {
-    let (manifest_path, mut manifest) = load_manifest(dir)?;
+    let (manifest_path, mut manifest, manifest_source) = load_manifest(dir)?;
     let file = safe_join(dir, Path::new(&manifest.file))?;
     let remote = fetch_export(token, &manifest.root_diagram_id).await?;
     validate_remote_root(&manifest.root_diagram_id, &remote)?;
     validate_portable_mermaid(&remote.mermaid)?;
-    let local = match fs::read_to_string(&file) {
-        Ok(value) => {
+    let (local, local_source) = match fs::read(&file) {
+        Ok(bytes) => {
+            let value = String::from_utf8(bytes.clone())
+                .map_err(|error| ("invalid_local", format!("cannot read {}: {error}", file.display())))?;
             validate_portable_mermaid(&value)
                 .map_err(|(_, message)| ("invalid_local", message))?;
-            Some(value)
+            (Some(value), Some(bytes))
         }
-        Err(error) if error.kind() == ErrorKind::NotFound => None,
+        Err(error) if error.kind() == ErrorKind::NotFound => (None, None),
         Err(error) => return Err(("invalid_local", format!("cannot read {}: {error}", file.display()))),
     };
     let state = local.as_deref().map_or(SyncState::LocalMissing, |value| classify(&manifest.synced_hash, value, &remote.mermaid));
-    if state == SyncState::Conflict || state == SyncState::LocalChanged {
+    if state == SyncState::Conflict {
         return Err(("sync_conflict", "local architecture changes would be overwritten; commit, restore, or reconcile them first".to_string()));
     }
     let changed = matches!(state, SyncState::RemoteChanged | SyncState::LocalMissing);
@@ -145,10 +157,14 @@ async fn pull(token: &str, dir: &Path, dry_run: bool, json: bool) -> Result<(), 
         let yaml = serde_yaml::to_string(&manifest).map_err(|e| ("manifest_invalid", e.to_string()))?;
         validate_sync_root_containment(dir)?;
         let file = safe_join(dir, Path::new(&manifest.file))?;
-        atomic_write_all(&[(file.clone(), source), (manifest_path, yaml)])?;
+        atomic_write_all_checked(
+            &[(file.clone(), source), (manifest_path.clone(), yaml)],
+            &[(file.clone(), local_source), (manifest_path, Some(manifest_source))],
+        )?;
     }
     if json { println!("{}", serde_json::json!({"ok":true,"dry_run":dry_run,"updated":changed,"file":file})); }
     else if changed { println!("{} {} {}", "✓".green(), if dry_run { "Would update" } else { "Updated" }, file.display()); }
+    else if state == SyncState::LocalChanged { println!("{} Remote is unchanged; local architecture was left untouched.", "✓".green()); }
     else { println!("{} Architecture is already in sync.", "✓".green()); }
     Ok(())
 }
@@ -158,6 +174,7 @@ async fn fetch_export(token: &str, root_id: &str) -> Result<PortableExport, (&'s
         .get(format!("{}/api/diagrams/{root_id}/export/mermaid", crate::config::base_url()))
         .bearer_auth(token).send().await.map_err(|e| ("network_error", e.to_string()))?;
     if response.status() == reqwest::StatusCode::NOT_FOUND { return Err(("remote_diagram_missing", format!("diagram {root_id} was not found"))); }
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED { return Err(("session_expired", "session expired; run vaxis login again".to_string())); }
     if !response.status().is_success() { return Err(("remote_error", format!("portable export request returned {}", response.status()))); }
     response.json().await.map_err(|e| ("parse_error", e.to_string()))
 }
@@ -167,11 +184,13 @@ fn validate_portable_mermaid(value: &str) -> Result<(), (&'static str, String)> 
     if trimmed.is_empty() { return Err(("mermaid_unavailable", "portable Mermaid export is empty".to_string())); }
     let lines: Vec<&str> = trimmed.lines().collect();
     let first_drill = lines.iter().position(|line| line.starts_with("%% vaxis:drill ")).unwrap_or(lines.len());
-    validate_diagram_level(&lines[..first_drill].join("\n"))?;
+    validate_diagram_level(&lines[..first_drill].join("\n"), first_drill < lines.len())?;
 
     let mut index = first_drill;
     while index < lines.len() {
-        if !lines[index].starts_with("%% vaxis:drill ") {
+        let marker = lines[index].strip_prefix("%% vaxis:drill ")
+            .filter(|node_id| !node_id.is_empty() && node_id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'));
+        if marker.is_none() {
             return Err(("mermaid_not_renderable", format!("unexpected portable content at line {}", index + 1)));
         }
         index += 1;
@@ -183,16 +202,25 @@ fn validate_portable_mermaid(value: &str) -> Result<(), (&'static str, String)> 
         if payload.is_empty() {
             return Err(("mermaid_not_renderable", "drill marker has no encoded payload".to_string()));
         }
-        validate_diagram_level(&payload.join("\n"))?;
+        validate_diagram_level(&payload.join("\n"), true)?;
         while index < lines.len() && lines[index].trim().is_empty() { index += 1; }
     }
     Ok(())
 }
 
-fn validate_diagram_level(value: &str) -> Result<(), (&'static str, String)> {
-    let first = value.lines().find(|line| !line.trim().is_empty()).map(str::trim_start).unwrap_or("");
-    if !(first.starts_with("flowchart ") || first.starts_with("graph ")) {
-        return Err(("mermaid_not_renderable", "diagram level has no Mermaid flowchart header".to_string()));
+fn validate_diagram_level(value: &str, require_flowchart: bool) -> Result<(), (&'static str, String)> {
+    let first = value.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("%%"))
+        .unwrap_or("");
+    let is_flowchart = first.starts_with("flowchart ") || first.starts_with("graph ");
+    let is_supported = is_flowchart || ["sequenceDiagram", "classDiagram", "erDiagram", "stateDiagram-v2"]
+        .iter().any(|header| first == *header || first.starts_with(&format!("{header} ")));
+    if require_flowchart && !is_flowchart {
+        return Err(("mermaid_not_renderable", "portable drill trees require a Mermaid flowchart header".to_string()));
+    }
+    if !is_supported {
+        return Err(("mermaid_not_renderable", "diagram level has no supported Mermaid header".to_string()));
     }
     let report = crate::mermaid_lint::lint(value);
     if let Some(issue) = report.errors().next() {
@@ -213,21 +241,28 @@ fn validate_remote_root(expected: &str, remote: &PortableExport) -> Result<(), (
     }
 }
 
-fn load_manifest(dir: &Path) -> Result<(PathBuf, Manifest), (&'static str, String)> {
+fn load_manifest(dir: &Path) -> Result<(PathBuf, Manifest, Vec<u8>), (&'static str, String)> {
     validate_sync_dir(dir)?;
     validate_sync_root_containment(dir)?;
     let path = dir.join(MANIFEST_FILE);
-    let text = fs::read_to_string(&path).map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { ("manifest_not_found", format!("{} was not found", path.display())) } else { ("manifest_invalid", e.to_string()) })?;
+    let source = fs::read(&path).map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { ("manifest_not_found", format!("{} was not found", path.display())) } else { ("manifest_invalid", e.to_string()) })?;
+    let text = String::from_utf8(source.clone()).map_err(|e| ("manifest_invalid", e.to_string()))?;
     let manifest: Manifest = serde_yaml::from_str(&text).map_err(|e| ("manifest_invalid", e.to_string()))?;
     if manifest.schema_version != SCHEMA_VERSION || manifest.root_diagram_id.trim().is_empty() || manifest.synced_hash.trim().is_empty() {
         return Err(("manifest_invalid", "manifest has unsupported schema or empty required fields".to_string()));
     }
     safe_join(dir, Path::new(&manifest.file))?;
-    Ok((path, manifest))
+    Ok((path, manifest, source))
 }
 
 fn refuse_existing_targets(paths: &[&Path]) -> Result<(), (&'static str, String)> {
-    if let Some(path) = paths.iter().find(|path| path.exists()) { return Err(("target_exists", format!("{} already exists", path.display()))); }
+    for path in paths {
+        match fs::symlink_metadata(path) {
+            Ok(_) => return Err(("target_exists", format!("{} already exists", path.display()))),
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(("target_check_failed", format!("cannot inspect {}: {error}", path.display()))),
+        }
+    }
     Ok(())
 }
 
@@ -296,10 +331,21 @@ fn classify(base: &str, local: &str, remote: &str) -> SyncState {
 }
 
 fn atomic_write_all(writes: &[(PathBuf, String)]) -> Result<(), (&'static str, String)> {
-    atomic_write_all_impl(writes, None)
+    atomic_write_all_impl(writes, None, None)
 }
 
-fn atomic_write_all_impl(writes: &[(PathBuf, String)], fail_before_install: Option<usize>) -> Result<(), (&'static str, String)> {
+fn atomic_write_all_checked(
+    writes: &[(PathBuf, String)],
+    expected: &[(PathBuf, Option<Vec<u8>>)],
+) -> Result<(), (&'static str, String)> {
+    atomic_write_all_impl(writes, None, Some(expected))
+}
+
+fn atomic_write_all_impl(
+    writes: &[(PathBuf, String)],
+    fail_before_install: Option<usize>,
+    expected: Option<&[(PathBuf, Option<Vec<u8>>)]>,
+) -> Result<(), (&'static str, String)> {
     for (path, _) in writes { if let Some(parent) = path.parent() { fs::create_dir_all(parent).map_err(|e| ("write_failed", e.to_string()))?; } }
     let mut staged: Vec<(PathBuf, PathBuf, Option<PathBuf>)> = Vec::new();
     for (index, (path, content)) in writes.iter().enumerate() {
@@ -327,21 +373,74 @@ fn atomic_write_all_impl(writes: &[(PathBuf, String)], fail_before_install: Opti
         } else { None };
         staged.push((temporary, path.clone(), backup));
     }
+    if let Some(expected) = expected {
+        for (path, expected_content) in expected {
+            let current = match fs::read(path) {
+                Ok(content) => Some(content),
+                Err(error) if error.kind() == ErrorKind::NotFound => None,
+                Err(error) => {
+                    cleanup_staged_temps(&staged);
+                    return Err(("local_changed_during_pull", format!("cannot recheck {}: {error}", path.display())));
+                }
+            };
+            if &current != expected_content {
+                cleanup_staged_temps(&staged);
+                return Err((
+                    "local_changed_during_pull",
+                    format!("{} changed while pull was preparing; no files were replaced", path.display()),
+                ));
+            }
+        }
+    }
     let mut installed = 0usize;
     for (index, (temporary, path, backup)) in staged.iter().enumerate() {
+        let expected_content = expected.and_then(|entries| {
+            entries.iter().find(|(expected_path, _)| expected_path == path).map(|(_, content)| content)
+        });
         let install_result = (|| -> std::io::Result<()> {
-            if let Some(backup) = backup { fs::rename(path, backup)?; }
+            if let Some(backup) = backup {
+                fs::rename(path, backup)?;
+                if let Some(expected_content) = expected_content {
+                    let actual = fs::read(backup)?;
+                    if expected_content.as_ref() != Some(&actual) {
+                        return Err(std::io::Error::new(ErrorKind::WouldBlock, "destination changed during pull"));
+                    }
+                }
+            } else if let Some(expected_content) = expected_content {
+                match fs::symlink_metadata(path) {
+                    Ok(_) => return Err(std::io::Error::new(ErrorKind::WouldBlock, "destination appeared during pull")),
+                    Err(error) if error.kind() == ErrorKind::NotFound && expected_content.is_none() => {}
+                    Err(error) if error.kind() == ErrorKind::NotFound => {
+                        return Err(std::io::Error::new(ErrorKind::WouldBlock, "destination disappeared during pull"));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
             if fail_before_install == Some(index) {
                 return Err(std::io::Error::other("simulated install failure"));
             }
-            fs::rename(temporary, path)
+            if fs::symlink_metadata(path).is_ok() {
+                return Err(std::io::Error::new(ErrorKind::WouldBlock, "destination reappeared during pull"));
+            }
+            fs::rename(temporary, path)?;
+            if let (Some(backup), Some(expected_content)) = (backup, expected_content) {
+                let actual = fs::read(backup)?;
+                if expected_content.as_ref() != Some(&actual) {
+                    return Err(std::io::Error::new(ErrorKind::WouldBlock, "destination changed during pull"));
+                }
+            }
+            Ok(())
         })();
         if let Err(error) = install_result {
             let mut restoration_failures = Vec::new();
             // Restore the current destination if its original was already moved.
             if let Some(backup) = backup {
-                if backup.exists() && fs::rename(backup, path).is_err() {
-                    restoration_failures.push(path.display().to_string());
+                if backup.exists() {
+                    if fs::symlink_metadata(path).is_ok() && fs::remove_file(path).is_err() {
+                        restoration_failures.push(path.display().to_string());
+                    } else if fs::rename(backup, path).is_err() {
+                        restoration_failures.push(path.display().to_string());
+                    }
                 }
             }
             for (_, applied_path, applied_backup) in staged[..installed].iter().rev() {
@@ -357,7 +456,8 @@ fn atomic_write_all_impl(writes: &[(PathBuf, String)], fail_before_install: Opti
             }
             for (temporary, _, _) in &staged { let _ = fs::remove_file(temporary); }
             if restoration_failures.is_empty() {
-                return Err(("write_failed", format!("{error}; original files restored")));
+                let code = if error.kind() == ErrorKind::WouldBlock { "local_changed_during_pull" } else { "write_failed" };
+                return Err((code, format!("{error}; original files restored")));
             }
             return Err(("restoration_incomplete", format!("{error}; could not restore: {}", restoration_failures.join(", "))));
         }
@@ -417,6 +517,56 @@ mod tests {
     #[test] fn state_names_are_stable() { assert_eq!(SyncState::InSync.as_str(), "in_sync"); }
 
     #[test]
+    fn accepts_supported_non_flowchart_roots_and_leading_comments() {
+        for mermaid in [
+            "%% repository architecture\nsequenceDiagram\n  A->>B: hello",
+            "classDiagram\n  Animal <|-- Dog",
+            "erDiagram\n  USER ||--o{ ORDER : places",
+            "stateDiagram-v2\n  [*] --> Ready",
+            "%% legal comment\nflowchart TB\n  a[A]",
+        ] {
+            assert!(validate_portable_mermaid(mermaid).is_ok(), "rejected {mermaid}");
+        }
+    }
+
+    #[test]
+    fn rejects_non_flowchart_drill_trees_and_malformed_markers() {
+        assert!(validate_portable_mermaid(
+            "sequenceDiagram\n  A->>B: hello\n%% vaxis:drill A\n%% vaxis:drill-line flowchart TB\n%% vaxis:drill-line child[Child]",
+        ).is_err());
+        assert!(validate_portable_mermaid(
+            "flowchart TB\n  service[Service]\n%% vaxis:drill service trailing-junk\n%% vaxis:drill-line flowchart TB\n%% vaxis:drill-line child[Child]",
+        ).is_err());
+    }
+
+    #[test]
+    fn checked_install_refuses_content_changed_after_classification() {
+        let root = tempdir().unwrap();
+        let destination = root.path().join("architecture.vaxis.mmd");
+        fs::write(&destination, "concurrent edit").unwrap();
+
+        let error = atomic_write_all_checked(
+            &[(destination.clone(), "remote update".into())],
+            &[(destination.clone(), Some(b"classified content".to_vec()))],
+        ).unwrap_err();
+
+        assert_eq!(error.0, "local_changed_during_pull");
+        assert_eq!(fs::read_to_string(destination).unwrap(), "concurrent edit");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn initialization_refuses_dangling_symlink_targets() {
+        use std::os::unix::fs::symlink;
+        let root = tempdir().unwrap();
+        let target = root.path().join("architecture.vaxis.mmd");
+        symlink(root.path().join("missing-target"), &target).unwrap();
+
+        assert_eq!(refuse_existing_targets(&[target.as_path()]).unwrap_err().0, "target_exists");
+        assert!(fs::symlink_metadata(target).unwrap().file_type().is_symlink());
+    }
+
+    #[test]
     fn replaces_existing_files_on_windows_and_other_platforms() {
         let root = tempdir().unwrap();
         let architecture = root.path().join("architecture.vaxis.mmd");
@@ -444,7 +594,7 @@ mod tests {
         let error = atomic_write_all_impl(&[
             (architecture.clone(), "new architecture".into()),
             (manifest.clone(), "new manifest".into()),
-        ], Some(1)).unwrap_err();
+        ], Some(1), None).unwrap_err();
 
         assert_eq!(error.0, "write_failed");
         assert_eq!(fs::read_to_string(architecture).unwrap(), "old architecture");
@@ -460,7 +610,7 @@ mod tests {
         let error = atomic_write_all_impl(&[
             (architecture.clone(), "new architecture".into()),
             (manifest.clone(), "new manifest".into()),
-        ], Some(1)).unwrap_err();
+        ], Some(1), None).unwrap_err();
 
         assert_eq!(error.0, "write_failed");
         assert!(!architecture.exists());
