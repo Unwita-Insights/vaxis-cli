@@ -245,8 +245,9 @@ fn validate_portable_mermaid(value: &str) -> Result<usize, (&'static str, String
         };
         index += 1;
         let mut payload = Vec::new();
-        while index < lines.len() && lines[index].starts_with("%% vaxis:drill-line") {
-            payload.push(lines[index].strip_prefix("%% vaxis:drill-line").unwrap().strip_prefix(' ').unwrap_or(lines[index].strip_prefix("%% vaxis:drill-line").unwrap()));
+        while index < lines.len() {
+            let Some(line) = parse_portable_drill_line(lines[index]) else { break; };
+            payload.push(line);
             index += 1;
         }
         if payload.is_empty() {
@@ -254,19 +255,38 @@ fn validate_portable_mermaid(value: &str) -> Result<usize, (&'static str, String
         }
         let payload = payload.join("\n");
         validate_diagram_level(&payload, false)?;
-        let explicit_path = payload.lines().find_map(|line| line.trim().strip_prefix("%% vaxis:path "));
+        let explicit_paths: Vec<&str> = payload.lines()
+            .filter_map(parse_portable_path_annotation)
+            .collect();
+        if explicit_paths.len() > 1 {
+            return Err(("mermaid_not_renderable", "drill payload declares more than one vaxis:path".to_string()));
+        }
+        let explicit_path = explicit_paths.first().copied();
         let parent = if let Some(path) = explicit_path {
+            validate_portable_path(path)?;
             let (parent_path, final_node) = path.rsplit_once('/').unwrap_or(("", path));
             if final_node != marker {
                 return Err(("mermaid_not_renderable", format!("drill path {path} does not end with node {marker}")));
+            }
+            if levels.contains_key(path) {
+                return Err(("mermaid_not_renderable", format!("drill path {path} is declared more than once")));
             }
             levels.get(parent_path).ok_or_else(|| (
                 "mermaid_not_renderable",
                 format!("drill path {path} references a parent level that does not exist"),
             ))?
         } else {
-            levels.values().find(|level| portable_level_contains_node(level, marker))
-                .ok_or_else(|| ("mermaid_not_renderable", format!("drill marker references missing parent node: {marker}")))?
+            let matches: Vec<&String> = levels.values()
+                .filter(|level| portable_level_contains_node(level, marker))
+                .collect();
+            match matches.as_slice() {
+                [] => return Err(("mermaid_not_renderable", format!("drill marker references missing parent node: {marker}"))),
+                [parent] => *parent,
+                _ => return Err((
+                    "mermaid_not_renderable",
+                    format!("legacy drill marker has multiple possible parent levels for node {marker}; add vaxis:path metadata"),
+                )),
+            }
         };
         validate_diagram_level(parent, true)?;
         if !portable_level_contains_node(parent, marker) {
@@ -274,10 +294,44 @@ fn validate_portable_mermaid(value: &str) -> Result<usize, (&'static str, String
         }
         if let Some(path) = explicit_path { levels.insert(path.to_string(), payload); }
         else { levels.insert(format!("legacy-{index}-{marker}"), payload); }
-        diagram_count += 1;
+        diagram_count = increment_portable_diagram_count(diagram_count)?;
         while index < lines.len() && lines[index].trim().is_empty() { index += 1; }
     }
     Ok(diagram_count)
+}
+
+fn increment_portable_diagram_count(current: usize) -> Result<usize, (&'static str, String)> {
+    if current >= MAX_PORTABLE_DIAGRAMS {
+        return Err((
+            "mermaid_not_renderable",
+            format!("portable Mermaid contains more than {MAX_PORTABLE_DIAGRAMS} diagrams"),
+        ));
+    }
+    Ok(current + 1)
+}
+
+fn parse_portable_drill_line(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("%% vaxis:drill-line")?;
+    if rest.is_empty() { Some("") } else { rest.strip_prefix(' ') }
+}
+
+fn validate_portable_path(path: &str) -> Result<(), (&'static str, String)> {
+    if path.is_empty() || path.split('/').any(|segment| {
+        segment.is_empty()
+            || !segment.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    }) {
+        return Err(("mermaid_not_renderable", format!("invalid vaxis:path {path:?}")));
+    }
+    Ok(())
+}
+
+fn parse_portable_path_annotation(line: &str) -> Option<&str> {
+    let line = line.trim();
+    if line == "%% vaxis:path" {
+        Some("")
+    } else {
+        line.strip_prefix("%% vaxis:path ").map(str::trim)
+    }
 }
 
 fn portable_level_contains_node(level: &str, node_id: &str) -> bool {
@@ -334,6 +388,7 @@ fn load_manifest(dir: &Path) -> Result<(PathBuf, Manifest, Vec<u8>), (&'static s
     if manifest.schema_version != SCHEMA_VERSION || manifest.root_diagram_id.trim().is_empty() || manifest.synced_hash.trim().is_empty() {
         return Err(("manifest_invalid", "manifest has unsupported schema or empty required fields".to_string()));
     }
+    validate_architecture_file(Path::new(&manifest.file))?;
     safe_join(dir, Path::new(&manifest.file))?;
     Ok((path, manifest, source))
 }
@@ -351,7 +406,7 @@ fn load_manifest_anchored(anchor: &Dir, dir: &Path) -> Result<(PathBuf, Manifest
     if manifest.schema_version != SCHEMA_VERSION || manifest.root_diagram_id.trim().is_empty() || manifest.synced_hash.trim().is_empty() {
         return Err(("manifest_invalid", "manifest has unsupported schema or empty required fields".to_string()));
     }
-    validate_relative_file(Path::new(&manifest.file))?;
+    validate_architecture_file(Path::new(&manifest.file))?;
     Ok((dir.join(MANIFEST_FILE), manifest, source))
 }
 
@@ -362,6 +417,14 @@ fn validate_relative_file(path: &Path) -> Result<PathBuf, (&'static str, String)
         return Err(("manifest_invalid", format!("unsafe repository path {}", path.display())));
     }
     Ok(path.to_path_buf())
+}
+
+fn validate_architecture_file(path: &Path) -> Result<PathBuf, (&'static str, String)> {
+    let path = validate_relative_file(path)?;
+    if path == Path::new(MANIFEST_FILE) {
+        return Err(("manifest_invalid", format!("architecture file cannot use reserved manifest path {MANIFEST_FILE}")));
+    }
+    Ok(path)
 }
 
 fn repository_root() -> Result<PathBuf, (&'static str, String)> {
@@ -522,9 +585,17 @@ fn atomic_write_all_anchored(
     writes: &[(PathBuf, String)],
     expected: &[(PathBuf, Option<Vec<u8>>)],
 ) -> Result<(), (&'static str, String)> {
-    for (path, _) in writes {
+    for (index, (path, _)) in writes.iter().enumerate() {
+        if writes[..index].iter().any(|(prior, _)| prior == path) {
+            return Err(("write_failed", format!("duplicate write destination {}", path.display())));
+        }
         if !expected.iter().any(|(expected_path, _)| expected_path == path) {
             return Err(("write_failed", format!("missing expected snapshot for {}", path.display())));
+        }
+    }
+    for (index, (path, _)) in expected.iter().enumerate() {
+        if expected[..index].iter().any(|(prior, _)| prior == path) {
+            return Err(("write_failed", format!("duplicate expected snapshot {}", path.display())));
         }
     }
     let mut staged: Vec<(PathBuf, PathBuf, Option<PathBuf>)> = Vec::new();
@@ -588,9 +659,14 @@ fn atomic_write_all_anchored(
             .expect("expected snapshots were validated before staging");
         let mut original_was_backed_up = false;
         let result = (|| -> std::io::Result<()> {
+            reject_symlink_path(anchor, path)
+                .map_err(|(_, message)| std::io::Error::new(ErrorKind::PermissionDenied, message))?;
             if let Some(backup) = backup {
                 anchor.rename(path, anchor, backup)?;
                 original_was_backed_up = true;
+                if anchor.symlink_metadata(backup)?.file_type().is_symlink() {
+                    return Err(std::io::Error::new(ErrorKind::PermissionDenied, "destination became a symlink during write"));
+                }
                 if expected_content.as_ref() != Some(&read_anchored(anchor, backup)?) {
                     return Err(std::io::Error::new(ErrorKind::WouldBlock, "destination changed during write"));
                 }
@@ -601,15 +677,14 @@ fn atomic_write_all_anchored(
                     Err(error) => return Err(error),
                 }
             }
-            anchor.rename(temporary, anchor, path)?;
+            install_staged_noreplace(anchor, temporary, path)?;
             Ok(())
         })();
         if let Err(error) = result {
             let mut restoration_failures = Vec::new();
             if original_was_backed_up {
                 if let Some(backup) = backup {
-                    if anchor.symlink_metadata(path).is_ok() { let _ = anchor.remove_file(path); }
-                    if anchor.rename(backup, anchor, path).is_err() {
+                    if !restore_current_destination_anchored(anchor, path, backup) {
                         restoration_failures.push(path.display().to_string());
                     }
                 }
@@ -651,6 +726,28 @@ fn atomic_write_all_anchored(
         if let Some(backup) = backup { let _ = anchor.remove_file(backup); }
     }
     Ok(())
+}
+
+fn restore_current_destination_anchored(anchor: &Dir, path: &Path, backup: &Path) -> bool {
+    match anchor.symlink_metadata(path) {
+        Ok(_) => false,
+        Err(error) if error.kind() == ErrorKind::NotFound => anchor.rename(backup, anchor, path).is_ok(),
+        Err(_) => false,
+    }
+}
+
+fn install_staged_noreplace(anchor: &Dir, temporary: &Path, path: &Path) -> std::io::Result<()> {
+    match anchor.hard_link(temporary, anchor, path) {
+        Ok(()) => {
+            let _ = anchor.remove_file(temporary);
+            Ok(())
+        }
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => Err(std::io::Error::new(
+            ErrorKind::WouldBlock,
+            "destination appeared during write",
+        )),
+        Err(error) => Err(error),
+    }
 }
 
 fn cleanup_staged_temps_anchored(anchor: &Dir, staged: &[(PathBuf, PathBuf, Option<PathBuf>)]) {
@@ -774,7 +871,13 @@ fn atomic_write_all_impl(
             if fs::symlink_metadata(path).is_ok() {
                 return Err(std::io::Error::new(ErrorKind::WouldBlock, "destination reappeared during pull"));
             }
-            fs::rename(temporary, path)?;
+            match fs::hard_link(temporary, path) {
+                Ok(()) => { let _ = fs::remove_file(temporary); }
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                    return Err(std::io::Error::new(ErrorKind::WouldBlock, "destination appeared during pull"));
+                }
+                Err(error) => return Err(error),
+            }
             if let (Some(backup), Some(expected_content)) = (backup, expected_content) {
                 let actual = fs::read(backup)?;
                 if expected_content.as_ref() != Some(&actual) {
@@ -788,17 +891,32 @@ fn atomic_write_all_impl(
             // Restore the current destination if its original was already moved.
             if let Some(backup) = backup {
                 if backup.exists() {
-                    if fs::symlink_metadata(path).is_ok() && fs::remove_file(path).is_err() {
-                        restoration_failures.push(path.display().to_string());
-                    } else if fs::rename(backup, path).is_err() {
-                        restoration_failures.push(path.display().to_string());
+                    match fs::symlink_metadata(path) {
+                        Ok(_) => restoration_failures.push(path.display().to_string()),
+                        Err(read_error) if read_error.kind() == ErrorKind::NotFound => {
+                            if fs::rename(backup, path).is_err() {
+                                restoration_failures.push(path.display().to_string());
+                            }
+                        }
+                        Err(_) => restoration_failures.push(path.display().to_string()),
                     }
                 }
             }
             for (_, applied_path, applied_backup) in staged[..installed].iter().rev() {
-                if applied_path.exists() && fs::remove_file(applied_path).is_err() {
-                    restoration_failures.push(applied_path.display().to_string());
-                    continue;
+                let installed_bytes = writes.iter().find(|(write_path, _)| write_path == applied_path)
+                    .map(|(_, content)| content.as_bytes()).unwrap_or_default();
+                match fs::read(applied_path) {
+                    Ok(current) if current == installed_bytes => {
+                        if fs::remove_file(applied_path).is_err() {
+                            restoration_failures.push(applied_path.display().to_string());
+                            continue;
+                        }
+                    }
+                    Err(read_error) if read_error.kind() == ErrorKind::NotFound => {}
+                    _ => {
+                        restoration_failures.push(applied_path.display().to_string());
+                        continue;
+                    }
                 }
                 if let Some(applied_backup) = applied_backup {
                     if fs::rename(applied_backup, applied_path).is_err() {
@@ -843,7 +961,11 @@ fn create_unique_sibling(path: &Path, kind: &str, index: usize) -> Result<(PathB
 fn unique_sibling_path(path: &Path, kind: &str, index: usize) -> Result<PathBuf, (&'static str, String)> {
     for attempt in 0..1000u32 {
         let candidate = path.with_extension(format!("vaxis-{kind}-{}-{index}-{attempt}", std::process::id()));
-        if !candidate.exists() { return Ok(candidate); }
+        match fs::symlink_metadata(&candidate) {
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(candidate),
+            Ok(_) => continue,
+            Err(error) => return Err(("write_failed", error.to_string())),
+        }
     }
     Err(("write_failed", format!("could not allocate a unique {kind} path beside {}", path.display())))
 }
@@ -906,6 +1028,9 @@ mod tests {
         assert!(validate_portable_mermaid(
             "flowchart TB\n  service[Service]\n%% vaxis:drill missing\n%% vaxis:drill-line flowchart TB\n%% vaxis:drill-line child[Child]",
         ).is_err());
+        assert!(validate_portable_mermaid(
+            "flowchart TB\n  service[Service]\n%% vaxis:drill service\n%% vaxis:drill-lineBAD flowchart TB",
+        ).is_err());
     }
 
     #[test]
@@ -923,6 +1048,87 @@ mod tests {
     }
 
     #[test]
+    fn rejects_ambiguous_legacy_parent_and_accepts_explicit_path() {
+        let legacy = [
+            "flowchart TB",
+            "  service[Service]",
+            "  shared[Root Shared]",
+            "%% vaxis:drill service",
+            "%% vaxis:drill-line flowchart TB",
+            "%% vaxis:drill-line   shared[Child Shared]",
+            "%% vaxis:drill shared",
+            "%% vaxis:drill-line flowchart TB",
+            "%% vaxis:drill-line   leaf[Leaf]",
+        ].join("\n");
+        let error = validate_portable_mermaid(&legacy).unwrap_err();
+        assert_eq!(error.0, "mermaid_not_renderable");
+        assert!(error.1.contains("multiple possible parent levels"));
+
+        let explicit = [
+            "flowchart TB",
+            "  service[Service]",
+            "  shared[Root Shared]",
+            "%% vaxis:drill service",
+            "%% vaxis:drill-line flowchart TB",
+            "%% vaxis:drill-line   shared[Child Shared]",
+            "%% vaxis:drill-line %% vaxis:path service",
+            "%% vaxis:drill shared",
+            "%% vaxis:drill-line flowchart TB",
+            "%% vaxis:drill-line   leaf[Leaf]",
+            "%% vaxis:drill-line %% vaxis:path service/shared",
+        ].join("\n");
+        assert_eq!(validate_portable_mermaid(&explicit).unwrap(), 3);
+    }
+
+    #[test]
+    fn rejects_duplicate_malformed_and_multiple_explicit_paths() {
+        let duplicate = [
+            "flowchart TB",
+            "  service[Service]",
+            "%% vaxis:drill service",
+            "%% vaxis:drill-line flowchart TB",
+            "%% vaxis:drill-line   first[First]",
+            "%% vaxis:drill-line %% vaxis:path service",
+            "%% vaxis:drill service",
+            "%% vaxis:drill-line flowchart TB",
+            "%% vaxis:drill-line   second[Second]",
+            "%% vaxis:drill-line %% vaxis:path service",
+        ].join("\n");
+        assert!(validate_portable_mermaid(&duplicate).unwrap_err().1.contains("declared more than once"));
+
+        let malformed = [
+            "flowchart TB",
+            "  service[Service]",
+            "%% vaxis:drill service",
+            "%% vaxis:drill-line flowchart TB",
+            "%% vaxis:drill-line   child[Child]",
+            "%% vaxis:drill-line %% vaxis:path bad//service",
+        ].join("\n");
+        assert!(validate_portable_mermaid(&malformed).unwrap_err().1.contains("invalid vaxis:path"));
+
+        let multiple = [
+            "flowchart TB",
+            "  service[Service]",
+            "%% vaxis:drill service",
+            "%% vaxis:drill-line flowchart TB",
+            "%% vaxis:drill-line   child[Child]",
+            "%% vaxis:drill-line %% vaxis:path service",
+            "%% vaxis:drill-line %% vaxis:path service",
+        ].join("\n");
+        assert!(validate_portable_mermaid(&multiple).unwrap_err().1.contains("more than one vaxis:path"));
+
+        let empty = [
+            "flowchart TB",
+            "  service[Service]",
+            "%% vaxis:drill service",
+            "%% vaxis:drill-line flowchart TB",
+            "%% vaxis:drill-line   child[Child]",
+            "%% vaxis:drill-line %% vaxis:path",
+        ].join("\n");
+        assert!(validate_portable_mermaid(&empty).unwrap_err().1.contains("invalid vaxis:path"));
+    }
+
+    #[test]
     fn rejects_remote_exports_outside_supported_limits() {
         let oversized_count = PortableExport {
             root_id: "root".into(), mermaid: "flowchart TB\n  a[A]".into(),
@@ -934,6 +1140,15 @@ mod tests {
             diagram_count: 1, revision: None,
         };
         assert_eq!(validate_export_limits(&oversized_mermaid).unwrap_err().0, "remote_export_too_large");
+    }
+
+    #[test]
+    fn portable_parser_enforces_the_diagram_count_limit() {
+        assert_eq!(
+            increment_portable_diagram_count(MAX_PORTABLE_DIAGRAMS - 1).unwrap(),
+            MAX_PORTABLE_DIAGRAMS,
+        );
+        assert!(increment_portable_diagram_count(MAX_PORTABLE_DIAGRAMS).is_err());
     }
 
     #[test]
@@ -1002,6 +1217,35 @@ mod tests {
     }
 
     #[test]
+    fn rollback_preserves_a_destination_recreated_after_backup() {
+        let root = tempdir().unwrap();
+        let anchor = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        let destination = Path::new("architecture.vaxis.mmd");
+        let backup = Path::new("architecture.vaxis-bak-test");
+        fs::write(root.path().join(destination), "concurrent work").unwrap();
+        fs::write(root.path().join(backup), "original").unwrap();
+
+        assert!(!restore_current_destination_anchored(&anchor, destination, backup));
+        assert_eq!(fs::read_to_string(root.path().join(destination)).unwrap(), "concurrent work");
+        assert_eq!(fs::read_to_string(root.path().join(backup)).unwrap(), "original");
+    }
+
+    #[test]
+    fn staged_install_never_replaces_an_existing_destination() {
+        let root = tempdir().unwrap();
+        let anchor = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        let temporary = Path::new("architecture.vaxis-tmp-test");
+        let destination = Path::new("architecture.vaxis.mmd");
+        fs::write(root.path().join(temporary), "staged").unwrap();
+        fs::write(root.path().join(destination), "concurrent work").unwrap();
+
+        let error = install_staged_noreplace(&anchor, temporary, destination).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::WouldBlock);
+        assert_eq!(fs::read_to_string(root.path().join(destination)).unwrap(), "concurrent work");
+        assert_eq!(fs::read_to_string(root.path().join(temporary)).unwrap(), "staged");
+    }
+
+    #[test]
     fn anchored_writer_cleans_staging_when_an_expected_snapshot_is_missing() {
         let root = tempdir().unwrap();
         let anchor = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
@@ -1016,6 +1260,37 @@ mod tests {
         assert_eq!(error.0, "write_failed");
         assert!(!root.path().join(format!("architecture.vaxis-tmp-{process_id}-0-0")).exists());
         assert!(!root.path().join("architecture.mmd").exists());
+    }
+
+    #[test]
+    fn anchored_writer_rejects_duplicate_destinations_and_snapshots_before_staging() {
+        let root = tempdir().unwrap();
+        let anchor = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        let destination = PathBuf::from("architecture.vaxis.mmd");
+
+        let duplicate_write = atomic_write_all_anchored(
+            &anchor,
+            &[(destination.clone(), "one".into()), (destination.clone(), "two".into())],
+            &[(destination.clone(), None)],
+        ).unwrap_err();
+        assert!(duplicate_write.1.contains("duplicate write destination"));
+
+        let duplicate_snapshot = atomic_write_all_anchored(
+            &anchor,
+            &[(destination.clone(), "one".into())],
+            &[(destination.clone(), None), (destination.clone(), None)],
+        ).unwrap_err();
+        assert!(duplicate_snapshot.1.contains("duplicate expected snapshot"));
+        assert!(fs::read_dir(root.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn manifest_cannot_point_architecture_content_at_the_manifest_itself() {
+        assert_eq!(
+            validate_architecture_file(Path::new(MANIFEST_FILE)).unwrap_err().0,
+            "manifest_invalid",
+        );
+        assert!(validate_architecture_file(Path::new(ARCHITECTURE_FILE)).is_ok());
     }
 
     #[cfg(unix)]
