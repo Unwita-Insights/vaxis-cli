@@ -7,6 +7,34 @@ This file starts with the release below. For anything earlier, see the
 [git history](https://github.com/Unwita-Insights/vaxis-cli/commits/main) and
 [GitHub releases](https://github.com/Unwita-Insights/vaxis-cli/releases).
 
+## [0.5.16] — 2026-08-20
+
+### Added
+
+- Architecture-as-Code repository synchronization with `vaxis diagrams sync init`,
+  `status`, and conflict-safe `pull` commands.
+- Versioned `vaxis.yaml` manifests and one Git-friendly `architecture.vaxis.mmd` containing the
+  complete drill hierarchy.
+- `sync status --check` for CI drift enforcement.
+- AI-assistant onboarding guidance for offering repository version control after
+  architecture creation, with explicit user consent before writing files.
+
+### Safety
+
+- Local/remote content hashing and conflict detection reject divergent edits. Initialization
+  refuses every existing target file, and pull stops on local read failures.
+- Pull uses staged writes and best-effort rollback with incomplete restoration reported;
+  rejects symlink escapes, invalid Mermaid, unavailable source, and unsafe paths.
+- Initialization rejects legacy or fallback Mermaid that cannot be rendered again under the
+  current Vaxis authoring contract, preventing non-restorable snapshots from being committed.
+- Newly discovered remote drill children are added without losing existing local diagrams.
+
+### Known limitation
+
+- Revision-safe `sync push` awaits backend optimistic-concurrency support. Visual-only
+  diagrams without stored Mermaid return `mermaid_unavailable` instead of producing blank
+  repository files.
+
 ## [0.5.0] — 2026-07-27
 
 ### Removed

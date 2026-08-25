@@ -263,6 +263,12 @@ pub enum AppsAction {
 
 #[derive(Subcommand)]
 pub enum DiagramsAction {
+    /// Version-control a Vaxis diagram tree in the current repository
+    Sync {
+        #[command(subcommand)]
+        action: SyncAction,
+    },
+
     /// List all diagrams in an application
     List {
         /// Application ID
@@ -432,6 +438,7 @@ pub enum DiagramsAction {
         /// Path to a .mmd file to import (conflicts with --mermaid)
         #[arg(long, conflicts_with = "mermaid")]
         file: Option<PathBuf>,
+
     },
 
     /// Validate (and optionally repair) a Mermaid diagram before sending to Vaxis
@@ -443,6 +450,41 @@ pub enum DiagramsAction {
         /// Auto-repair fixable issues and write the result back to FILE (ignored when FILE is '-')
         #[arg(long)]
         fix: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SyncAction {
+    /// Link a root diagram and export its complete tree into the repository
+    Init {
+        /// Root diagram ID
+        root_diagram_id: String,
+
+        /// Repository directory for vaxis.yaml and architecture.vaxis.mmd
+        #[arg(long, default_value = "architecture")]
+        dir: PathBuf,
+    },
+
+    /// Compare the portable repository file with its linked Vaxis tree
+    Status {
+        /// Repository directory containing vaxis.yaml
+        #[arg(long, default_value = "architecture")]
+        dir: PathBuf,
+
+        /// Exit with status 2 unless the portable architecture is in sync
+        #[arg(long)]
+        check: bool,
+    },
+
+    /// Pull non-conflicting remote changes into the portable repository file
+    Pull {
+        /// Repository directory containing vaxis.yaml
+        #[arg(long, default_value = "architecture")]
+        dir: PathBuf,
+
+        /// Show changes without writing files
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 

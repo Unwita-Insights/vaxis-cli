@@ -113,6 +113,8 @@ route, `POST` is always create-or-rotate (UPSERT). Old token invalidated immedia
 | `POST` | `/api/diagrams` | `{ applicationId, name }` | `{ id, name }` 201 | diagram |
 | `GET` | `/api/diagrams/:id` | — | Full diagram + `child_nodes: { nodeId→childDiagramId }` + `ancestry: [{diagram_id, diagram_name, node_id?}]` | diagram, node_child |
 | `GET` | `/api/diagrams/:id/tree` | — | `{ root_id, tree: { id, name, children: [...] } }` | diagram (recursive) |
+| `GET` | `/api/diagrams/:id/export/mermaid` | — | `{ root_id, diagram_count, mermaid }` complete portable drill tree | diagram (recursive) |
+| `POST` | `/api/diagrams/:id/import` | `{ mermaid }`; portable drill trees require a new empty target | `{ ok, drill_count }`; validates the full tree before restoring it | diagram, node_child, ai_session_message |
 | `PUT` | `/api/diagrams/:id` | `{ scene_json, scene_version, name? }` | `{ ok: true, scene_version }` or `409 { error: 'stale scene_version', current_scene_version }` | diagram |
 | `PATCH` | `/api/diagrams/:id/meta` | `{ name }` | `{ ok: true, name }` | diagram |
 | `DELETE` | `/api/diagrams/:id` | — | `{ ok: true }` (cascades all children) | diagram |
@@ -230,7 +232,20 @@ First-time drill (no child yet)
   → navigate /diagram/:newChildId
 ```
 
-### 3. Share a diagram publicly
+### 3. Version a diagram tree in Git through the CLI
+```
+vaxis diagrams sync init|status|pull
+  → GET /api/diagrams/:diagramId/export/mermaid
+    (the response resolves and reports the actual connected-tree root)
+  → consume one complete portable Mermaid drill document
+  → write/read repository-local vaxis.yaml + architecture.vaxis.mmd
+```
+
+The exporter serializes reviewed `scene_json` and falls back to stored `current_mermaid` plus
+`child_nodes` for unopened generated diagrams. Revision-safe sync push still requires a
+backend expected-revision precondition and is not exposed by CLI v0.5.16.
+
+### 4. Share a diagram publicly
 ```
 DiagramEditor → Share menu
   → POST /api/diagrams/:rootDiagramId/share   (create-or-ROTATE → { token, edit_token })
@@ -247,7 +262,7 @@ Public user opens /view/:token
   → can drill into children via GET /api/public/:token/diagrams/:childId
 ```
 
-### 4. CLI login (device flow)
+### 5. CLI login (device flow)
 ```
 $ vaxis login
   → POST /api/cli/start           → { state, url }

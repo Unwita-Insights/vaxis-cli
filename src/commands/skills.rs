@@ -148,7 +148,10 @@ pub fn install(
 
     let interactive =
         !json && !yes && io::stdin().is_terminal() && io::stdout().is_terminal();
-    let agents = select_agents(requested_agents, yes, interactive, json);
+    // An explicit project scope is itself a complete safe selection: install
+    // for every supported host, deduplicating shared destinations. This keeps
+    // the documented `vaxis install --skills --project` command scriptable.
+    let agents = select_agents(requested_agents, yes || project, interactive, json);
     let scope = select_scope(project, global, yes, interactive, json);
     let mut results = Vec::new();
     let mut had_errors = false;

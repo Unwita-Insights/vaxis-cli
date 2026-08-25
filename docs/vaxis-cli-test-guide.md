@@ -183,6 +183,24 @@ vaxis diagrams show $PAYMENT_ID --json
 
 ---
 
+## Phase 7A — Version Architecture in Git
+
+Run this phase with a root diagram whose complete tree has stored Mermaid source:
+
+```bash
+vaxis diagrams sync init $ROOT_DIAGRAM_ID --dir architecture --json
+vaxis diagrams sync status --dir architecture --json
+vaxis diagrams sync status --dir architecture --check --json
+vaxis diagrams sync pull --dir architecture --dry-run --json
+```
+
+Verify that `architecture/vaxis.yaml` and `architecture/architecture.vaxis.mmd` were created
+and recursive drills appear as `%% vaxis:drill` payloads. Test both a canvas-reviewed tree
+and an unopened generated tree. Modify the portable file and confirm `status --check` exits 2.
+Delete the test directory only after reviewing its contents.
+
+---
+
 ## Phase 8 — Rename a Diagram
 
 ```bash

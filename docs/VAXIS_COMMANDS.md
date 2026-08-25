@@ -94,6 +94,21 @@ vaxis diagrams import <diagram-id> `
   --json
 ```
 
+### Version architecture in Git
+
+```powershell
+vaxis diagrams sync init <root-diagram-id> --dir architecture --json
+vaxis diagrams sync status --dir architecture --json
+vaxis diagrams sync status --dir architecture --check --json
+vaxis diagrams sync pull --dir architecture --dry-run --json
+vaxis diagrams sync pull --dir architecture --json
+```
+
+`init` must run inside a Git repository. It creates `architecture/vaxis.yaml` and one
+`architecture/architecture.vaxis.mmd` containing the root and every recursive drill.
+The export works after canvas review or hands-free from stored generated Mermaid. `pull`
+never overwrites a local conflict. Revision-safe push is not available yet.
+
 ### History and sessions
 
 ```powershell

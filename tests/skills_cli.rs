@@ -117,3 +117,19 @@ fn project_install_reports_json_result() {
         .is_file());
     fs::remove_dir_all(project).unwrap();
 }
+
+#[test]
+fn exact_project_install_command_targets_all_supported_hosts() {
+    let project = temporary_project();
+    fs::create_dir_all(&project).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_vaxis"))
+        .current_dir(&project)
+        .args(["install", "--skills", "--project"])
+        .output()
+        .expect("vaxis install should run");
+
+    assert!(output.status.success(), "stdout={} stderr={}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    assert!(project.join(".agents/skills/vaxis/SKILL.md").is_file());
+    assert!(project.join(".claude/skills/vaxis/SKILL.md").is_file());
+    fs::remove_dir_all(project).unwrap();
+}

@@ -99,6 +99,9 @@ and paste it in.)
 | `vaxis diagrams tree <id>` | Full parent→child hierarchy |
 | `vaxis diagrams share <id> [--rotate] [--revoke]` | Get/create the public link. Covers this diagram + everything it drills into |
 | `vaxis diagrams import <id> --mermaid "..."` | Save raw Mermaid, bypass AI |
+| `vaxis diagrams sync init <rootId>` | Export the complete drill tree into one Git-friendly `.vaxis.mmd` |
+| `vaxis diagrams sync status [--check]` | Report local/remote drift; `--check` enforces clean CI state |
+| `vaxis diagrams sync pull [--dry-run]` | Pull remote-only changes without overwriting conflicts |
 | `vaxis diagrams undo <id>` | Drop the last AI turn before retrying |
 | `vaxis diagrams rename <id> <name>` | Rename |
 | `vaxis diagrams delete [id] [--force]` | Delete it and its children |

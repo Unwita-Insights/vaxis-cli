@@ -343,6 +343,129 @@ vaxis diagrams import <diagramId> --mermaid "graph TD\n    A[User] --> B[API]" -
 vaxis diagrams import <diagramId> --file ./architecture.mmd --json
 ```
 
+### Architecture version control
+
+```bash
+# Export a root diagram and every recursive drill into one portable file
+vaxis diagrams sync init <rootDiagramId> --json
+
+# Compare the local portable file with Vaxis without changing either side
+vaxis diagrams sync status --json
+# CI: exit 2 when any local/remote drift exists
+vaxis diagrams sync status --check --json
+
+# Preview or pull remote-only changes; conflicts are never overwritten
+vaxis diagrams sync pull --dry-run --json
+vaxis diagrams sync pull --json
+```
+
+`sync init` creates exactly `architecture/vaxis.yaml` and
+`architecture/architecture.vaxis.mmd`. The `.vaxis.mmd` is one portable Mermaid document:
+its visible root is ordinary Mermaid, while `%% vaxis:drill` and
+`%% vaxis:drill-line` comments carry every recursive child canvas. Pasting or importing that
+single file into Vaxis reconstructs the drill hierarchy. It does not commit or push Git
+changes. `vaxis diagrams init` is not a command; repository linking belongs under
+`diagrams sync`. Initialization must run inside a Git repository and never overwrites a
+local/remote conflict.
+
+The portable exporter supports two creation flows:
+
+1. **Reviewed canvas:** after the user opens, reviews, and confirms the diagram, export the
+   current complete `scene_json` tree.
+2. **Hands-free:** after generation/import succeeds, the user may approve file creation
+   without opening the canvas. Scene-less levels use stored `current_mermaid` plus the
+   durable `child_nodes` mapping. They must never become empty drill placeholders.
+
+#### Offer version control after architecture creation
+
+Only after an interactive session successfully saves a new or updated architecture through
+`diagrams generate` or `diagrams import`, and no `architecture/vaxis.yaml` exists, ask once
+whether to version-control the diagram tree completed in that operation. Do not make this
+offer merely because an arbitrary or legacy diagram was discovered. Use the
+host's structured question tool (Claude Code's `AskUserQuestion`, Codex's question/request
+input tool, or the equivalent) rather than relying on an unstructured sentence when such a
+tool is available:
+
+Immediately after every successful `diagrams generate` or `diagrams import`, show the user
+the direct open link before asking the version-control question. Construct it as
+`<configured-web-base>/diagram/<diagramId>` using the configured Vaxis host (for example,
+`http://localhost:3000/diagram/<diagramId>`); use `https://app.vaxis.dev` only when no custom
+host is configured. Do this even when the user did not explicitly ask for a link.
+
+> Do you want to version-control this architecture with your project? I can create one
+> portable Vaxis Mermaid file and a manifest in `architecture/` so changes can be reviewed and committed
+> with Git.
+
+Use this structured choice contract:
+
+```text
+header: "Git history"
+question: "Do you want to version-control this architecture diagram with your project?"
+options:
+  - "Yes, create files" — Create architecture/vaxis.yaml and architecture/architecture.vaxis.mmd.
+  - "No, not now" — Keep the architecture only in Vaxis for this session.
+```
+
+- Ask before writing any repository files. Never enable sync automatically.
+- If accepted, use the root diagram from the just-completed generate/import operation,
+  explain that it and all drill children will be encoded in one portable file, then run
+  `diagrams sync init <rootId> --json` after confirmation.
+- If declined, make no files and do not ask again in the current session.
+- Do not show this onboarding question in Automated / CI mode.
+- If a manifest already exists, do not offer initialization; use `sync status` when relevant.
+- If the successful operation added or updated a drill diagram under an existing manifest,
+  preview with `sync pull --dry-run` and ask before pulling it into the repository.
+- If `sync init` returns `mermaid_unavailable` or `mermaid_not_renderable`, write nothing and
+  explain that the diagram must first be regenerated or imported as Vaxis-compatible Mermaid.
+- Never imply that initialization creates a Git commit or pushes to GitHub.
+
+Before applying remote changes, run `diagrams sync pull --dry-run --json` and show the
+affected files. In an interactive AI session, use the host's structured question tool to ask
+whether to apply those changes. Run `diagrams sync pull --json` only after Yes. This consent
+is required even though the CLI call uses `--json`; only an explicitly configured automated
+workflow may apply a pull without an interactive question.
+
+After a successful `sync init`:
+
+1. Run read-only `git status --short -- <sync-dir>` using the actual `--dir` value. New files
+   are untracked, so do not claim that plain `git diff` reviews them.
+2. Report exactly which architecture files were created.
+3. Tell the user to review and publish them with commands equivalent to:
+
+   ```bash
+   git add -- <sync-dir>/
+   git diff --cached -- <sync-dir>/
+   git commit -m "docs: version Vaxis architecture"
+   git push
+   ```
+
+4. Do not execute `git add`, `git commit`, or `git push` merely because the user answered
+   Yes to architecture version control. The Yes answer authorizes creation of the architecture
+   files only. Perform Git writes only when the user explicitly asks; ask for separate approval
+   immediately before pushing if it has not already been explicitly authorized.
+
+#### Historical architecture from Git (planned, not available in v0.5.16)
+
+The intended future workflow is:
+
+```text
+vaxis diagrams sync render --ref <commit|tag|branch>
+```
+
+It will read `vaxis.yaml` and the historical `architecture.vaxis.mmd` directly from the selected Git ref,
+create a separate Vaxis snapshot tree with new diagram IDs, preserve all drill relationships,
+and return a Vaxis link. It must never overwrite the current Vaxis architecture or rewrite the
+historical Git manifest. Requests such as "show the architecture from v1.2.0" or "render the
+architecture before the payment refactor" map to this workflow.
+
+`sync render` is NOT implemented in v0.5.16. Today, an old
+`architecture.vaxis.mmd` can already be rendered manually: create a separate, new empty target
+root and run `diagrams import <targetId> --file architecture/architecture.vaxis.mmd --json`.
+Vaxis decodes the embedded drill payload and reconstructs the complete hierarchy. The future
+command will automate reading the Git ref and creating that isolated target. Never import a
+portable historical tree over a diagram that already has scene content, stored Mermaid, or drill
+children; the API rejects that operation so old and current hierarchy levels cannot be mixed.
+
 ---
 
 ## Standard workflows
@@ -2215,7 +2338,7 @@ input or file errors.
 
 9. **Edit large diagrams by regenerating with care.** If the user asks to add or remove specific nodes on a diagram that already has many nodes, read `current_mermaid` first, then resend the FULL updated Mermaid via `generate --mermaid` — carrying every existing node forward unchanged. There is no diff/patch endpoint; you are the AI, so you make the edit (see Workflow 14 and Rule 14).
 
-10. **End every session with a diagram link.** After completing a design session, give the user the direct diagram URL constructed from the root diagram ID — no API call needed: `https://app.vaxis.dev/diagram/<rootDiagramId>`. Use the root diagram ID — it covers the full drill tree. Use the `auth_url` base from `vaxis config show --json` if a custom host is configured; fall back to `https://app.vaxis.dev`.
+10. **Show the diagram link immediately after generation and again at handoff.** After every successful generate/import, give the direct URL constructed from the root diagram ID: `<configured-web-base>/diagram/<rootDiagramId>`. Use the root ID because it covers the full drill tree. Use the configured host from `vaxis config show --json` (including localhost); fall back to `https://app.vaxis.dev`. Do not wait until the end of the session to provide the first link.
 
 11. **Reuse context before fetching.** If diagram IDs or app IDs were established earlier in the conversation, use them directly. Only re-fetch with `apps list` or `diagrams list` when the context is genuinely unclear.
 
@@ -2230,15 +2353,20 @@ input or file errors.
     | `diagrams create` | "I'll add a diagram called '&lt;name&gt;' to project '&lt;app&gt;'. Continue?" |
     | `diagrams generate` | "Here's my plan: [1-line summary of what will change]. Ready to save?" |
     | `diagrams import` | "This will overwrite '&lt;diagram&gt;' with the Mermaid you provided. Continue?" |
+    | `diagrams sync init` | "Do you want to version-control this architecture? This will create the manifest and Mermaid files under '&lt;sync-dir&gt;'." |
+    | `diagrams sync pull` | "This will apply the previewed, non-conflicting remote changes under '&lt;sync-dir&gt;'. Continue?" |
     | `apps update` / `diagrams rename` | "Rename '&lt;old&gt;' → '&lt;new&gt;'. Continue?" |
     | `diagrams delete` / `apps delete` | "This will permanently delete '&lt;name&gt;' and all its children. Continue?" |
     | `diagrams share --rotate` | "This will invalidate the existing link. Continue?" |
     | `diagrams share --revoke` | "This will make '&lt;diagram&gt;' private immediately. Anyone with the current link will get a 404. Continue?" |
 
     **Exceptions — skip this gate when:**
-    - Running in `--json` mode (scripting / CI — no interactive prompt available).
+    - Running in an explicitly configured Automated / CI workflow. Merely adding `--json`
+      in an interactive Claude, Codex, or other AI session does not waive consent for
+      `sync init` or a non-dry-run `sync pull`.
     - Read-only commands (`apps list`, `diagrams list`, `diagrams show`, `diagrams tree`, `me`,
-      `config show`, `diagrams ask`) — these never need confirmation.
+      `config show`, `diagrams ask`, `diagrams sync status`, `diagrams sync pull --dry-run`)
+      — these never need confirmation.
     - The user already confirmed the exact action in the current turn (e.g. they said "yes,
       proceed" or "go ahead and save" → call generate without asking again).
     - WF0 established Automated / CI mode for the session.
@@ -2247,7 +2375,8 @@ input or file errors.
     other agent hosts) auto-approves TOOL CALLS only — it does NOT answer conversational
     questions on the user's behalf. These confirmation prompts are plain text in the
     conversation; the user must still respond before the next step runs. The only mechanism
-    that bypasses them is CI/automated mode (`--json` flag or WF0 mode = Automated).
+    that bypasses them is an explicitly configured CI/automated workflow. `--json` is an
+    output mode and does not itself authorize repository writes.
 
     **WF0 is mandatory at conversation start.** The AI must never assume execution mode —
     this must be asked via WF0 before any file reading or CLI call. The WF19 Step 0 gates

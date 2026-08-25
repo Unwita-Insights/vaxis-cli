@@ -110,6 +110,9 @@ Every command accepts a global `--json` flag for machine-readable output.
 | `vaxis diagrams delete [id] [--app-id <appId>] [--force]` | Delete a diagram and its children |
 | `vaxis diagrams patch <id> --diff <json>` | Apply a targeted node/edge diff without rewriting the whole diagram |
 | `vaxis diagrams import <id> --mermaid <str>` | Save raw Mermaid directly, no AI |
+| `vaxis diagrams sync init <rootId>` | Export and link a complete diagram tree for Git version control |
+| `vaxis diagrams sync status [--check]` | Compare linked repository files with Vaxis; `--check` fails on drift for CI |
+| `vaxis diagrams sync pull [--dry-run]` | Pull non-conflicting Vaxis changes into repository files |
 | `vaxis diagrams format` | Print the Mermaid format reference (types, drill syntax, limits) |
 
 > `--mermaid` and `--prompt` are mutually exclusive on `generate`. Use `--mermaid` when *you*
@@ -144,6 +147,12 @@ hosts:
 
 ```bash
 vaxis install --skills
+```
+
+For a non-interactive project install across all supported hosts:
+
+```bash
+vaxis install --skills --project
 ```
 
 The small [`skills/vaxis/SKILL.md`](skills/vaxis/SKILL.md) file tells the assistant to load
